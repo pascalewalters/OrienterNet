@@ -136,19 +136,24 @@ class MapArea(MapElement):
 
     @classmethod
     def from_relation(cls, rel: OSMRelation, label: str, group: str, osm: OSMData):
-        outers_inners = multipolygon_from_relation(rel, osm)
-        if outers_inners is None:
-            return None
-        outers, inners = outers_inners
-        outers = [np.stack([n.xy for n in way]) for way in outers]
-        inners = [np.stack([n.xy for n in way]) for way in inners]
+        # outers_inners = multipolygon_from_relation(rel, osm)
+        # if outers_inners is None:
+        #     return None
+        # outers, inners = outers_inners
+
+        # outers = [np.stack([n.xy for n in way]) for way in outers]
+        # inners = [np.stack([n.xy for n in way]) for way in inners]
+
+        nodes = [osm.nodes[x.ref] for x in rel.members]
+        outers = [node.xy for node in nodes]
         return cls(
             rel.id_,
             label,
             group,
             rel.tags,
             outers=outers,
-            inners=inners,
+            # inners=inners,
+            inners = []
         )
 
     @classmethod
@@ -173,57 +178,66 @@ class MapData:
     def from_osm(cls, osm: OSMData):
         self = cls()
 
-        for node in filter(filter_node, osm.nodes.values()):
-            label = parse_node(node.tags)
-            if label is None:
-                continue
-            group = match_to_group(label, Patterns.nodes)
-            if group is None:
-                group = match_to_group(label, Patterns.ways)
-            if group is None:
-                continue  # missing
-            self.nodes[node.id_] = MapNode.from_osm(node, label, group)
-
-        for way in filter(filter_way, osm.ways.values()):
-            label = parse_way(way.tags)
-            if label is None:
-                continue
-            group = match_to_group(label, Patterns.ways)
-            if group is None:
-                group = match_to_group(label, Patterns.nodes)
-            if group is None:
-                continue  # missing
-            self.lines[way.id_] = MapLine.from_osm(way, label, group)
-
-        for area in filter(filter_area, osm.ways.values()):
-            label = parse_area(area.tags)
-            if label is None:
-                continue
-            group = match_to_group(label, Patterns.areas)
-            if group is None:
-                group = match_to_group(label, Patterns.ways)
-            if group is None:
-                group = match_to_group(label, Patterns.nodes)
-            if group is None:
-                continue  # missing
-            self.areas[area.id_] = MapArea.from_way(area, label, group)
+        for node in osm.nodes.values():
+            self.nodes[node.id_] = MapNode.from_osm(node, 'node', 'node')
+    
+        for way in osm.ways.values():
+            self.lines[way.id_] = MapLine.from_osm(way, 'way', 'way')
 
         for rel in osm.relations.values():
-            if rel.tags.get("type") != "multipolygon":
-                continue
-            label = parse_area(rel.tags)
-            if label is None:
-                continue
-            group = match_to_group(label, Patterns.areas)
-            if group is None:
-                group = match_to_group(label, Patterns.ways)
-            if group is None:
-                group = match_to_group(label, Patterns.nodes)
-            if group is None:
-                continue  # missing
-            area = MapArea.from_relation(rel, label, group, osm)
-            assert rel.id_ not in self.areas  # not sure if there can be collision
-            if area is not None:
-                self.areas[rel.id_] = area
+            self.areas[rel.id_] = MapArea.from_relation(rel, 'area', 'area', osm)
+
+        # for node in filter(filter_node, osm.nodes.values()):
+        #     label = parse_node(node.tags)
+        #     if label is None:
+        #         continue
+        #     group = match_to_group(label, Patterns.nodes)
+        #     if group is None:
+        #         group = match_to_group(label, Patterns.ways)
+        #     if group is None:
+        #         continue  # missing
+        #     self.nodes[node.id_] = MapNode.from_osm(node, label, group)
+
+        # for way in filter(filter_way, osm.ways.values()):
+        #     label = parse_way(way.tags)
+        #     if label is None:
+        #         continue
+        #     group = match_to_group(label, Patterns.ways)
+        #     if group is None:
+        #         group = match_to_group(label, Patterns.nodes)
+        #     if group is None:
+        #         continue  # missing
+        #     self.lines[way.id_] = MapLine.from_osm(way, label, group)
+
+        # for area in filter(filter_area, osm.ways.values()):
+        #     label = parse_area(area.tags)
+        #     if label is None:
+        #         continue
+        #     group = match_to_group(label, Patterns.areas)
+        #     if group is None:
+        #         group = match_to_group(label, Patterns.ways)
+        #     if group is None:
+        #         group = match_to_group(label, Patterns.nodes)
+        #     if group is None:
+        #         continue  # missing
+        #     self.areas[area.id_] = MapArea.from_way(area, label, group)
+
+        # for rel in osm.relations.values():
+        #     if rel.tags.get("type") != "multipolygon":
+        #         continue
+        #     label = parse_area(rel.tags)
+        #     if label is None:
+        #         continue
+        #     group = match_to_group(label, Patterns.areas)
+        #     if group is None:
+        #         group = match_to_group(label, Patterns.ways)
+        #     if group is None:
+        #         group = match_to_group(label, Patterns.nodes)
+        #     if group is None:
+        #         continue  # missing
+        #     area = MapArea.from_relation(rel, label, group, osm)
+        #     assert rel.id_ not in self.areas  # not sure if there can be collision
+        #     if area is not None:
+        #         self.areas[rel.id_] = area
 
         return self

@@ -69,6 +69,47 @@ Try our minimal demo - take a picture with your phone in any city and find its e
     <em>OrienterNet positions any image within a large area - try it with your own images!</em>
 </p>
 
+## Indoor Notes
+
+### MVF to OpenStreetMap (OSM)
+
+First, convert the MVF to the OSM-like format. Download the Den 1880 MVF from [here](https://drive.google.com/file/d/1_y_rN2MG-SKr4CGt4Mrmwv_0nigQWmkl/view?usp=drive_link). Extract the .zip file into a folder of geojson files. Then, run the script:
+
+```
+python map_to_osm.py
+```
+
+This only reads in annotations and obstructions from the MVF. Annotations are nodes (points), and obstructions are ways (lines) and areas (polygons). In OSM, ways and areas are collections of nodes.
+
+The script generates a file den_osm.json.
+
+### Run Inference with OrienterNet
+
+```
+python warp_image.py
+```
+
+You'll need to set the value of `image_path` to the path to an input image.
+
+Notes:
+* In the MapEncoder model, `embedding dim = 16`, `output dim = 8`, `num classes = {'areas': 7, 'ways': 10, 'nodes': 33}`
+* These classes are set in `maploc.osm.parser.Patterns`
+  * I think they are based on tags that come from OSM
+* In OSM, areas are made up of relations. These can be nodes or ways. In the MVF, areas are just polygons, so I generate areas only from nodes.
+  * You can see this in `maploc.osm.data.MapArea.from_relation`
+  * From what I've seen, MVF polygons are filled, so I don't consider any inner nodes
+* Since I didn't consider any OSM classes when parsing the MVF, they are only given the classes `node`, `way`, and `area`
+  * This is in `maploc.osm.data.MapData.from_osm`
+  * When rasterized, areas are `parking`, lines are `playground`, and nodes are `grass`. This is in `maploc.osm.raster.render_raster_masks`
+  * These classes don't mean anything. I just picked random classes so that inference would run
+* Instead of querying OSM, read in the json from the first step in `maploc.osm.tiling.TilingManager.from_bbox`
+
+Next steps:
+* Train the method end-to-end with our indoor data
+  * Need to get it in the same format as this method
+* Take a look at the classes from OSM, select classes that are meaningful for MVF
+* The method automatically gets a bounding box from an initial guess of the address. This makes sense for an outdoor query, since the area of interest is large. For the indoor case, we could get a bounding box around the map data
+
 ## Evaluation
 
 #### Mapillary Geo-Localization dataset

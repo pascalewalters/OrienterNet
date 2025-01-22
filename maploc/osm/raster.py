@@ -43,8 +43,8 @@ class Canvas:
         cv2.fillPoly(self.raster, uv[None].astype(np.int32), 255)
 
     def draw_multipolygon(self, xys: List[np.ndarray]):
-        uvs = [self.to_uv(xy).round().astype(np.int32) for xy in xys]
-        cv2.fillPoly(self.raster, uvs, 255)
+        uvs = np.array([self.to_uv(xy).round().astype(np.int32) for xy in xys])
+        cv2.fillPoly(self.raster, [uvs], 255)
 
     def draw_line(self, xy: np.ndarray, width: float = 1):
         uv = self.to_uv(xy)
@@ -69,20 +69,21 @@ def render_raster_masks(
     masks = {k: np.zeros((canvas.h, canvas.w), np.uint8) for k in all_groups}
 
     for area in areas:
-        canvas.raster = masks[area.group]
+        # canvas.raster = masks[area.group]
+        canvas.raster = masks['parking']
         outlines = area.outers + area.inners
         canvas.draw_multipolygon(outlines)
-        if area.group == "building":
-            canvas.raster = masks["building_outline"]
-            for line in outlines:
-                canvas.draw_line(line)
+        # if area.group == "building":
+        canvas.raster = masks["building_outline"]
+        # for line in outlines:
+        #     canvas.draw_line(line)
 
     for line in lines:
-        canvas.raster = masks[line.group]
+        canvas.raster = masks['playground']
         canvas.draw_line(line.xy)
 
     for node in nodes:
-        canvas.raster = masks[node.group]
+        canvas.raster = masks['grass']
         canvas.draw_cell(node.xy)
 
     return masks

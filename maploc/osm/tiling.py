@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import rtree
 from PIL import Image
+import json
 
 from ..utils.geo import BoundaryBox, Projection
 from .data import MapData
@@ -99,7 +100,15 @@ class TileManager:
             if osm.box is not None:
                 assert osm.box.contains(bbox_osm)
         else:
-            osm = OSMData.from_dict(get_osm(bbox_osm, path))
+            # osm_dict = get_osm(bbox_osm, path)
+            # osm = OSMData.from_dict(get_osm(bbox_osm, path))
+
+            with open('den_osm.json', 'r') as f:
+                osm_dict = json.load(f)
+            osm = OSMData.from_dict(osm_dict)
+            bbox = osm.box
+
+        bbox = projection.project(bbox)
 
         osm.add_xy_to_nodes(projection)
         map_data = MapData.from_osm(osm)
