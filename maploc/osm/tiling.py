@@ -94,16 +94,21 @@ class TileManager:
         path: Optional[Path] = None,
         tile_size: int = 128,
     ):
-        bbox_osm = projection.unproject(bbox)
-        if path is not None and path.is_file():
-            osm = OSMData.from_file(path)
-            if osm.box is not None:
-                assert osm.box.contains(bbox_osm)
+        #bbox_osm = projection.unproject(bbox)
+        if path is not None:            # and path.is_file():
+            # path = Path(path).resolve()
+            if path.is_file():
+                with open(path, 'r') as f:
+                    osm_dict = json.load(f)
+                osm = OSMData.from_dict(osm_dict)
+                bbox = osm.box
+                # if osm.box is not None:
+                #     assert osm.box.contains(bbox_osm)
         else:
             # osm_dict = get_osm(bbox_osm, path)
             # osm = OSMData.from_dict(get_osm(bbox_osm, path))
 
-            with open('den_osm.json', 'r') as f:
+            with open('yyc_osm.json', 'r') as f:
                 osm_dict = json.load(f)
             osm = OSMData.from_dict(osm_dict)
             bbox = osm.box

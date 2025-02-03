@@ -52,7 +52,7 @@ class BaseModel(nn.Module, metaclass=ABCMeta):
     }
     default_conf = {}
     required_data_keys = []
-    strict_conf = True
+    strict_conf = False
 
     def __init__(self, conf):
         """Perform some logic and call the _init method of the child model."""

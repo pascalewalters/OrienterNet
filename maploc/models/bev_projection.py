@@ -89,3 +89,68 @@ class CartesianProjection(torch.nn.Module):
         grid_uz = self.grid_to_polar(cam)
         image, valid = self.sample_from_polar(image_polar, valid_polar, grid_uz)
         return image, valid, grid_uz
+
+class SimpleCartesianProjection(torch.nn.Module):
+    def __init__(self, x_max, ppm):
+        super().__init__()
+        self.x_max = x_max
+        self.Δ = Δ = 1 / ppm
+        
+        # Create 2D grid for x,y coordinates
+        grid_xy = make_grid(
+            x_max * 2 + Δ,  # width
+            x_max * 2 + Δ,  # height (same as width for square crop)
+            step_y=Δ,
+            step_x=Δ,
+            orig_x=-x_max,
+            orig_y=-x_max
+        )
+        self.register_buffer("grid_xy", grid_xy, persistent=False)
+        
+    @property
+    def grid_x(self):
+        """Return x coordinates of the grid"""
+        return self.grid_xy[..., 0]  # Return only x coordinates
+
+    def rotate_grid(self, grid, bearing):
+        """Rotate grid by bearing angle"""
+        # Convert bearing to radians
+        theta = bearing * torch.pi / 180
+        
+        # Create rotation matrix
+        cos_t = torch.cos(theta)
+        sin_t = torch.sin(theta)
+        rot_matrix = torch.stack([
+            torch.stack([cos_t, -sin_t], dim=-1),
+            torch.stack([sin_t, cos_t], dim=-1),
+        ], dim=-2)
+        
+        # Apply rotation
+        return torch.matmul(grid, rot_matrix.transpose(-1, -2))
+
+    def forward(self, features, bearing):
+        """
+        Args:
+            features: Image features [B, C, H, W]
+            bearing: Rotation angle in degrees [B]
+        """
+        batch_size = features.shape[0]
+        
+        # Expand grid to batch size
+        grid = self.grid_xy.expand(batch_size, -1, -1, -1)
+        
+        # Rotate grid based on bearing
+        rotated_grid = self.rotate_grid(grid, bearing)
+        
+        # Normalize grid coordinates to [-1, 1] for grid_sample
+        grid_norm = rotated_grid / self.x_max
+        
+        # Sample features using rotated grid
+        warped_features = grid_sample(
+            features,
+            grid_norm,
+            align_corners=False,
+            mode='bilinear'
+        )
+        
+        return warped_features

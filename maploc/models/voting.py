@@ -16,7 +16,7 @@ class TemplateSampler(torch.nn.Module):
         super().__init__()
 
         Δ = 1 / ppm
-        h, w = grid_xz_bev.shape[:2]
+        h, w = grid_xz_bev.shape
         ksize = max(w, h * 2 + 1)
         radius = ksize * Δ
         grid_xy = make_grid(
@@ -41,9 +41,13 @@ class TemplateSampler(torch.nn.Module):
         rotmats = rotmat2d(angles / 180 * np.pi)
         grid_xy_rot = torch.einsum("...nij,...hwj->...nhwi", rotmats, grid_xy)
 
-        grid_ij_rot = (grid_xy_rot - grid_xz_bev[..., :1, :1, :]) * grid_xy.new_tensor(
-            [1, -1]
-        )
+        # grid_ij_rot = (grid_xy_rot - grid_xz_bev[..., :1, :1, :]) * grid_xy.new_tensor(
+        #     [1, -1]
+        # )
+        # grid_ij_rot = grid_ij_rot / Δ
+        # grid_norm = (grid_ij_rot + 0.5) / grid_ij_rot.new_tensor([w, h]) * 2 - 1
+        grid_origin = grid_xz_bev[0, 0] 
+        grid_ij_rot = (grid_xy_rot - grid_origin) * grid_xy.new_tensor([1, -1])
         grid_ij_rot = grid_ij_rot / Δ
         grid_norm = (grid_ij_rot + 0.5) / grid_ij_rot.new_tensor([w, h]) * 2 - 1
 

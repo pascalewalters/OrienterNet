@@ -62,7 +62,10 @@ class ConsoleLogger(pl.callbacks.Callback):
             **dict(module.metrics_val.items()),
             **dict(module.losses_val.items()),
         }
-        results = [f"{k} {v.compute():.3E}" for k, v in results.items()]
+        results = [
+            f"{k} {v.compute():.3E}" for k, v in results.items()
+            if k in ['position_error', 'bearing_error', 'total_loss']
+        ]
         logger.info(f'[Validation] {{{", ".join(results)}}}')
 
 
@@ -120,8 +123,15 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
     if init_checkpoint_path is not None:
         logger.info("Initializing the model from checkpoint %s.", init_checkpoint_path)
         model = GenericModule.load_from_checkpoint(
-            Path(init_checkpoint_path), strict=True, find_best=False, cfg=cfg
+            Path(init_checkpoint_path), 
+            strict=False, 
+            find_best=False, 
+            cfg=cfg
         )
+        # Reinitialize the final classification layer for single class
+        model.model.reinit_final_layers(num_classes={'wall': 1})
+        if rank == 0:
+            logger.info("Reinitialized final layers for single wall class classification")
     else:
         model = GenericModule(cfg)
     if rank == 0:
@@ -159,7 +169,7 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
                 (cfg.data["loading"][split].num_workers + cfg.experiment.gpus - 1)
                 / cfg.experiment.gpus
             )
-    data = data_modules[cfg.data.get("name", "mapillary")](cfg.data)
+    data = data_modules[cfg.data.get("name", "yyc")](cfg.data)
 
     tb_args = {"name": cfg.experiment.name, "version": ""}
     tb = pl.loggers.TensorBoardLogger(EXPERIMENTS_PATH, **tb_args)

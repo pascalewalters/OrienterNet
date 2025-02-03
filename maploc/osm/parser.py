@@ -126,7 +126,7 @@ def parse_area(tags):
 
 def parse_way(tags):
     keys = tags.keys()
-    for key in ["highway", "barrier", "natural"]:
+    for key in ["highway", "barrier", "natural", "leisure"]:
         if key in keys:
             return f"{key}:{tags[key]}"
     return None
@@ -161,8 +161,8 @@ class Patterns:
         cycleway="highway:cycleway",
         path="highway:(pedestrian|footway|steps|path|corridor)",
         road="highway:(motorway|trunk|primary|secondary|tertiary|service|construction|track|unclassified|residential|.*_link)",  # noqa E501
-        busway="highway:busway",
-        tree_row="natural:tree_row",  # maybe merge with node?
+        busway="highway:busway", # maybe merge with node?
+        playground="leisure:(playground|pitch)",
     )
     # + nodes: bollard
 

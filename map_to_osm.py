@@ -5,12 +5,13 @@ import os
 
 output_dict = {}
 
-mvf_folder = "Mappedin Office  - Den 1880"
+mvf_folder = "/home/kevinmeng/workspace/mappedin/VPS/MVF Mappedin Office  - Den 1880"
 
 with open(mvf_folder + "/map.geojson", "r") as f:
     m = json.load(f)
 
 # Get 2nd floor
+print(m)
 second_floor = [level for level in m if level['externalId'] == 'Level 2']
 second_floor_id = second_floor[0]['id']
 
@@ -70,7 +71,8 @@ for obstruction in obstructions['features']:
         idx += 1
 
     if obstruction['geometry']['type'] == 'LineString':
-        output_dict['elements'].append({"type": "way", 
+        output_dict['elements'].append({"type": "way",
+                                        "tags": {"leisure": "playground"}, 
                                         "id": idx,
                                         "visible": True,
                                         "nodes": [i for i in indexes],})
@@ -87,6 +89,64 @@ for obstruction in obstructions['features']:
                                         })
     idx += 1
     indexes = []
+
+with open(os.path.join(mvf_folder, 'window', second_floor_id + '.geojson'), "r") as f:
+    windows = json.load(f)
+
+for window in windows['features']:
+    coordinates = window['geometry']['coordinates']
+    indexes = []
+    
+    for coordinate in coordinates:
+        output_dict['elements'].append({
+            "type": "node", 
+            "id": idx,
+            "lat": coordinate[1],
+            "lon": coordinate[0],
+            "visible": True
+        })
+        indexes.append(idx)
+        idx += 1
+
+    output_dict['elements'].append({
+        "type": "way",
+        "tags": {"barrier": "hedge"}, 
+        "id": idx,
+        "visible": True,
+        "nodes": [i for i in indexes],
+    })
+    idx += 1
+    indexes = []
+########################################################
+with open(os.path.join(mvf_folder, 'entrance', second_floor_id + '.geojson'), "r") as f:
+    entrances = json.load(f)
+
+for entrance in entrances['features']:
+    coordinates = entrance['geometry']['coordinates']
+    indexes = []
+    
+    for coordinate in coordinates:
+        output_dict['elements'].append({
+            "type": "node", 
+            "id": idx,
+            "lat": coordinate[1],
+            "lon": coordinate[0],
+            "visible": True
+        })
+        indexes.append(idx)
+        idx += 1
+
+    output_dict['elements'].append({
+        "type": "way",
+        "tags": {"barrier": "fence"}, 
+        "id": idx,
+        "visible": True,
+        "nodes": [i for i in indexes],
+    })
+    idx += 1
+    indexes = []
+
+
 
 with open('den_osm.json', 'w') as f:
     json.dump(output_dict, f)

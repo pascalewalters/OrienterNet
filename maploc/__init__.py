@@ -25,3 +25,4 @@ if len(pl_logger.handlers):
 repo_dir = Path(__file__).parent.parent
 EXPERIMENTS_PATH = repo_dir / "experiments/"
 DATASETS_PATH = repo_dir / "datasets/"
+YYC_DATASET_PATH  = "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS"

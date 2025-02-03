@@ -13,7 +13,7 @@ from maploc.utils.viz_localization import (
 )
 from maploc.utils.viz_2d import features_to_RGB
 
-image_path = "IMG_0937.jpg"
+image_path = "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/Den1880_3DScan/image2d-140.jpg"
 prior_address = "14 Erb St. W, Waterloo, ON N2L 1S7"
 
 demo = Demo(num_rotations=256, device="cpu")
@@ -21,7 +21,7 @@ demo = Demo(num_rotations=256, device="cpu")
 image, camera, gravity, proj, bbox = demo.read_input_image(
     image_path,
     prior_address=prior_address,
-    tile_size_meters=128,  # try 64, 256, etc.
+    tile_size_meters=32,  # try 64, 256, etc.
 )
 
 tiler = TileManager.from_bbox(proj, bbox + 10, demo.config.data.pixel_per_meter)

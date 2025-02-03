@@ -3,23 +3,26 @@
 import numpy as np
 import torch
 from torch.nn.functional import normalize
+import torch.nn.functional as F
+from torch import nn
 
 from . import get_model
 from .base import BaseModel
 from .bev_net import BEVNet
-from .bev_projection import CartesianProjection, PolarProjectionDepth
+from .bev_projection import SimpleCartesianProjection
 from .map_encoder import MapEncoder
 from .metrics import AngleError, AngleRecall, Location2DError, Location2DRecall
 from .voting import (
     TemplateSampler,
-    argmax_xyr,
+    argmax_xy,
     conv2d_fft_batchwise,
-    expectation_xyr,
+    expectation_xy,
     log_softmax_spatial,
     mask_yaw_prior,
     nll_loss_xyr,
     nll_loss_xyr_smoothed,
 )
+import torchmetrics
 
 
 class OrienterNet(BaseModel):
@@ -29,12 +32,13 @@ class OrienterNet(BaseModel):
         "bev_net": "???",
         "latent_dim": "???",
         "matching_dim": "???",
-        "scale_range": [0, 9],
-        "num_scale_bins": "???",
+        "scale_range": [0, 9],  # useless?
+        "num_scale_bins": "???", # useless?
         "z_min": None,
-        "z_max": "???",
-        "x_max": "???",
+        "z_max": None,
+        "x_max": None,
         "pixel_per_meter": "???",
+        "bearing_loss_weight": "???",
         "num_rotations": "???",
         "add_temperature": False,
         "normalize_features": False,
@@ -44,7 +48,7 @@ class OrienterNet(BaseModel):
         "sigma_xy": 1,
         "sigma_r": 2,
         # depcreated
-        "depth_parameterization": "scale",
+        # "depth_parameterization": "scale",
         "norm_depth_scores": False,
         "normalize_scores_by_dim": False,
         "normalize_scores_by_num_valid": True,
@@ -53,32 +57,40 @@ class OrienterNet(BaseModel):
     }
 
     def _init(self, conf):
-        assert not self.conf.norm_depth_scores
-        assert self.conf.depth_parameterization == "scale"
-        assert not self.conf.normalize_scores_by_dim
-        assert self.conf.normalize_scores_by_num_valid
-        assert self.conf.prior_renorm
+        # assert not self.conf.norm_depth_scores
+        # assert self.conf.depth_parameterization == "scale"
+        # assert not self.conf.normalize_scores_by_dim
+        # assert self.conf.normalize_scores_by_num_valid
+        # assert self.conf.prior_renorm
 
         Encoder = get_model(conf.image_encoder.get("name", "feature_extractor_v2"))
         self.image_encoder = Encoder(conf.image_encoder.backbone)
         self.map_encoder = MapEncoder(conf.map_encoder)
         self.bev_net = None if conf.bev_net is None else BEVNet(conf.bev_net)
+        
+        image_out_dim = (
+            conf.image_encoder.backbone.output_dim  # If using feature_extractor_v2
+            if hasattr(conf.image_encoder.backbone, "output_dim")
+            else conf.latent_dim  # Fallback to latent_dim
+        )
 
         ppm = conf.pixel_per_meter
-        self.projection_polar = PolarProjectionDepth(
-            conf.z_max,
-            ppm,
-            conf.scale_range,
-            conf.z_min,
-        )
-        self.projection_bev = CartesianProjection(
-            conf.z_max, conf.x_max, ppm, conf.z_min
+        # self.projection_polar = PolarProjectionDepth(
+        #     conf.z_max,
+        #     ppm,
+        #     conf.scale_range,
+        #     conf.z_min,
+        # )
+        self.projection_bev = SimpleCartesianProjection(
+            x_max=conf.x_max,
+            ppm=ppm
         )
         self.template_sampler = TemplateSampler(
-            self.projection_bev.grid_xz, ppm, conf.num_rotations
+            self.projection_bev.grid_x, 
+            ppm, 
+            conf.num_rotations
         )
 
-        self.scale_classifier = torch.nn.Linear(conf.latent_dim, conf.num_scale_bins)
         if conf.bev_net is None:
             self.feature_projection = torch.nn.Linear(
                 conf.latent_dim, conf.matching_dim
@@ -86,120 +98,155 @@ class OrienterNet(BaseModel):
         if conf.add_temperature:
             temperature = torch.nn.Parameter(torch.tensor(0.0))
             self.register_parameter("temperature", temperature)
-
-    def exhaustive_voting(self, f_bev, f_map, valid_bev, confidence_bev=None):
+            
+        self.bearing_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(image_out_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+        )
+            
+    def exhaustive_voting(self, f_bev, f_map, valid_bev=None, confidence=None):
+        """2D feature matching with rotation"""
+        B, C, H, W = f_map.shape
+        
+        # Normalize features if configured
         if self.conf.normalize_features:
-            f_bev = normalize(f_bev, dim=1)
-            f_map = normalize(f_map, dim=1)
+            f_bev = F.normalize(f_bev, dim=1)
+            f_map = F.normalize(f_map, dim=1)
 
-        # Build the templates and exhaustively match against the map.
-        if confidence_bev is not None:
-            f_bev = f_bev * confidence_bev.unsqueeze(1)
-        f_bev = f_bev.masked_fill(~valid_bev.unsqueeze(1), 0.0)
-        templates = self.template_sampler(f_bev)
-        with torch.autocast("cuda", enabled=False):
-            scores = conv2d_fft_batchwise(
-                f_map.float(),
-                templates.float(),
-                padding_mode=self.conf.padding_matching,
-            )
-        if self.conf.add_temperature:
+        # Compute correlation between BEV features and map features
+        # This gives us a similarity score for each position
+        scores = torch.einsum('bchw,bcHW->bhwHW', f_bev, f_map)
+        
+        # Apply confidence weighting if available
+        if confidence is not None:
+            scores = scores * confidence[:, None, None]
+            
+        # Apply valid mask if available
+        if valid_bev is not None:
+            scores = scores * valid_bev[:, None]
+            
+        # Apply temperature scaling if configured
+        if hasattr(self, 'temperature'):
             scores = scores * torch.exp(self.temperature)
 
-        # Reweight the different rotations based on the number of valid pixels in each
-        # template. Axis-aligned rotation have the maximum number of valid pixels.
-        valid_templates = self.template_sampler(valid_bev.float()[None]) > (1 - 1e-4)
-        num_valid = valid_templates.float().sum((-3, -2, -1))
-        scores = scores / num_valid[..., None, None]
         return scores
 
+    # def exhaustive_voting(self, f_bev, f_map, valid_bev, confidence_bev=None):
+    #     if self.conf.normalize_features:
+    #         f_bev = normalize(f_bev, dim=1)
+    #         f_map = normalize(f_map, dim=1)
+
+    #     # Build the templates and exhaustively match against the map.
+    #     if confidence_bev is not None:
+    #         f_bev = f_bev * confidence_bev.unsqueeze(1)
+    #     f_bev = f_bev.masked_fill(~valid_bev.unsqueeze(1), 0.0)
+    #     templates = self.template_sampler(f_bev)
+    #     with torch.autocast("cuda", enabled=False):
+    #         scores = conv2d_fft_batchwise(
+    #             f_map.float(),
+    #             templates.float(),
+    #             padding_mode=self.conf.padding_matching,
+    #         )
+    #     if self.conf.add_temperature:
+    #         scores = scores * torch.exp(self.temperature)
+
+    #     # Reweight the different rotations based on the number of valid pixels in each
+    #     # template. Axis-aligned rotation have the maximum number of valid pixels.
+    #     valid_templates = self.template_sampler(valid_bev.float()[None]) > (1 - 1e-4)
+    #     num_valid = valid_templates.float().sum((-3, -2, -1))
+    #     scores = scores / num_valid[..., None, None]
+    #     return scores
+
     def _forward(self, data):
-        pred = {}
-        pred_map = pred["map"] = self.map_encoder(data)
-        f_map = pred_map["map_features"][0]
-
-        # Extract image features.
-        level = 0
-        f_image = self.image_encoder(data)["feature_maps"][level]
-        camera = data["camera"].scale(1 / self.image_encoder.scales[level])
-        camera = camera.to(data["image"].device, non_blocking=True)
-
-        # Estimate the monocular priors.
-        pred["pixel_scales"] = scales = self.scale_classifier(f_image.moveaxis(1, -1))
-        f_polar = self.projection_polar(f_image, scales, camera)
-
-        # Map to the BEV.
-        with torch.autocast("cuda", enabled=False):
-            f_bev, valid_bev, _ = self.projection_bev(
-                f_polar.float(), None, camera.float()
-            )
-        pred_bev = {}
-        if self.conf.bev_net is None:
-            # channel last -> classifier -> channel first
-            f_bev = self.feature_projection(f_bev.moveaxis(1, -1)).moveaxis(-1, 1)
-        else:
-            pred_bev = pred["bev"] = self.bev_net({"input": f_bev})
-            f_bev = pred_bev["output"]
-
-        scores = self.exhaustive_voting(
-            f_bev, f_map, valid_bev, pred_bev.get("confidence")
-        )
-        scores = scores.moveaxis(1, -1)  # B,H,W,N
-        if "log_prior" in pred_map and self.conf.apply_map_prior:
-            scores = scores + pred_map["log_prior"][0].unsqueeze(-1)
-        # pred["scores_unmasked"] = scores.clone()
-        if "map_mask" in data:
-            scores.masked_fill_(~data["map_mask"][..., None], -np.inf)
-        if "yaw_prior" in data:
-            mask_yaw_prior(scores, data["yaw_prior"], self.conf.num_rotations)
+        # Get map features
+        f_map = self.map_encoder(data['map'])
+        
+        # Get image features
+        f_image = self.image_encoder(data['image'])
+        
+        # Project to top-down view using ground truth bearing for training
+        f_bev = self.projection_bev(f_image, data['bearing'])
+        
+        # Add a bearing estimation head
+        bearing_pred = self.bearing_head(f_image)  # New bearing estimation
+        
+        # Match features for position estimation
+        scores = self.exhaustive_voting(f_bev, f_map)
         log_probs = log_softmax_spatial(scores)
+        
+        # Get position and bearing estimates
         with torch.no_grad():
-            uvr_max = argmax_xyr(scores).to(scores)
-            uvr_avg, _ = expectation_xyr(log_probs.exp())
-
+            xy_max = argmax_xy(scores).to(scores)
+            xy_avg, _ = expectation_xy(log_probs.exp())
+        
         return {
-            **pred,
             "scores": scores,
             "log_probs": log_probs,
-            "uvr_max": uvr_max,
-            "uv_max": uvr_max[..., :2],
-            "yaw_max": uvr_max[..., 2],
-            "uvr_expectation": uvr_avg,
-            "uv_expectation": uvr_avg[..., :2],
-            "yaw_expectation": uvr_avg[..., 2],
+            "xy_max": xy_max,
+            "xy_expectation": xy_avg,
+            "bearing_pred": bearing_pred,  # Add bearing prediction
             "features_image": f_image,
             "features_bev": f_bev,
-            "valid_bev": valid_bev.squeeze(1),
         }
 
     def loss(self, pred, data):
-        xy_gt = data["uv"]
-        yaw_gt = data["roll_pitch_yaw"][..., -1]
-        if self.conf.do_label_smoothing:
-            nll = nll_loss_xyr_smoothed(
-                pred["log_probs"],
-                xy_gt,
-                yaw_gt,
-                self.conf.sigma_xy / self.conf.pixel_per_meter,
-                self.conf.sigma_r,
-                mask=data.get("map_mask"),
-            )
-        else:
-            nll = nll_loss_xyr(pred["log_probs"], xy_gt, yaw_gt)
-        loss = {"total": nll, "nll": nll}
-        if self.training and self.conf.add_temperature:
-            loss["temperature"] = self.temperature.expand(len(nll))
-        return loss
-
-    def metrics(self):
+        """Calculate losses for both position and bearing"""
+        # Position loss from scores
+        pos_loss = -pred['log_probs'].max(dim=1)[0].mean()
+        
+        # Bearing loss (circular)
+        bearing_loss = circular_loss(
+            pred['bearing_pred'].squeeze(-1),
+            data['bearing'],
+            period=360.0
+        )
+        
+        # Combine losses
+        total_loss = pos_loss + self.conf.bearing_loss_weight * bearing_loss
+        
         return {
-            "xy_max_error": Location2DError("uv_max", self.conf.pixel_per_meter),
-            "xy_expectation_error": Location2DError(
-                "uv_expectation", self.conf.pixel_per_meter
-            ),
-            "yaw_max_error": AngleError("yaw_max"),
-            "xy_recall_2m": Location2DRecall(2.0, self.conf.pixel_per_meter, "uv_max"),
-            "xy_recall_5m": Location2DRecall(5.0, self.conf.pixel_per_meter, "uv_max"),
-            "yaw_recall_2°": AngleRecall(2.0, "yaw_max"),
-            "yaw_recall_5°": AngleRecall(5.0, "yaw_max"),
+            'total': total_loss,
+            'position': pos_loss,
+            'bearing': bearing_loss,
         }
+
+    def metrics(self, pred=None, data=None):
+        """Calculate metrics for both position and bearing"""
+        if pred is None or data is None:
+            # Return empty metrics during initialization
+            return {
+                'position_error': torchmetrics.MeanMetric(),
+                'bearing_error': torchmetrics.MeanMetric(),
+            }
+            
+        with torch.no_grad():
+            # Position error (in meters)
+            pos_error = torch.norm(
+                pred['xy_expectation'] - data['position'],
+                dim=-1
+            )
+            
+            # Bearing error (in degrees)
+            bearing_error = circular_distance(
+                pred['bearing_pred'].squeeze(-1),
+                data['bearing'],
+                period=360.0
+            )
+        
+        return {
+            'position_error': pos_error,
+            'bearing_error': bearing_error,
+        }
+
+def circular_loss(pred, target, period=360.0):
+    """Calculate circular MSE loss for bearing"""
+    diff = (pred - target + period/2) % period - period/2
+    return (diff ** 2).mean()
+
+def circular_distance(pred, target, period=360.0):
+    """Calculate absolute circular distance for bearing"""
+    diff = (pred - target + period/2) % period - period/2
+    return torch.abs(diff)

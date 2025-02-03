@@ -79,7 +79,8 @@ def render_raster_masks(
         #     canvas.draw_line(line)
 
     for line in lines:
-        canvas.raster = masks['playground']
+        ##############
+        canvas.raster = masks[line.group]
         canvas.draw_line(line.xy)
 
     for node in nodes:
