@@ -6,14 +6,9 @@ loading:
   val:
     batch_size: ${..train.batch_size}
     num_workers: ${.batch_size}
-# make sure train and val locations are at least 5m apart
-selection_subset_val: furthest
-max_num_val: 500
 # map data
 num_classes:
-  areas: 7    # These need to match original model
-  ways: 10
-  nodes: 33
+  walls: 1
 pixel_per_meter: 2
 crop_size_meters: 64
 max_init_error: 32
