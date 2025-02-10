@@ -126,7 +126,7 @@ def parse_area(tags):
 
 def parse_way(tags):
     keys = tags.keys()
-    for key in ["highway", "barrier", "natural", "leisure"]:
+    for key in ["highway", "barrier", "natural", "leisure", "obstruction"]:
         if key in keys:
             return f"{key}:{tags[key]}"
     return None
@@ -140,79 +140,38 @@ def match_to_group(label, patterns):
 
 
 class Patterns:
-    areas = dict(
-        building="building($|:.*?)*",
-        parking="amenity:parking",
-        playground="leisure:(playground|pitch)",
-        grass="(landuse:grass|landcover:grass|landuse:meadow|landuse:flowerbed|natural:grassland)",  # noqa E501
-        park="leisure:(park|garden|dog_park)",
-        forest="(landuse:forest|natural:wood)",
-        water="(natural:water|waterway:*)",
-    )
+    # areas = dict(
+    #     building="building($|:.*?)*",
+    #     parking="amenity:parking",
+    #     playground="leisure:(playground|pitch)",
+    #     grass="(landuse:grass|landcover:grass|landuse:meadow|landuse:flowerbed|natural:grassland)",  # noqa E501
+    #     park="leisure:(park|garden|dog_park)",
+    #     forest="(landuse:forest|natural:wood)",
+    #     water="(natural:water|waterway:*)",
+    # )
     # + ways: road, path
     # + node: fountain, bicycle_parking
 
     ways = dict(
-        fence="barrier:(fence|yes)",
-        wall="barrier:(wall|retaining_wall)",
-        hedge="barrier:hedge",
-        kerb="barrier:kerb",
-        building_outline="building($|:.*?)*",
-        cycleway="highway:cycleway",
-        path="highway:(pedestrian|footway|steps|path|corridor)",
-        road="highway:(motorway|trunk|primary|secondary|tertiary|service|construction|track|unclassified|residential|.*_link)",  # noqa E501
-        busway="highway:busway", # maybe merge with node?
-        playground="leisure:(playground|pitch)",
+        wall="obstruction:wall"
     )
     # + nodes: bollard
 
     nodes = dict(
-        tree="natural:tree",
-        stone="(natural:stone|barrier:block)",
-        crossing="highway:crossing",
-        lamp="highway:street_lamp",
-        traffic_signal="highway:traffic_signals",
-        bus_stop="highway:bus_stop",
-        stop_sign="highway:stop",
-        junction="highway:motorway_junction",
-        bus_stop_position="public_transport:stop_position",
-        gate="barrier:(gate|lift_gate|swing_gate|cycle_barrier)",
-        bollard="barrier:bollard",
-        shop="(shop.*?|amenity:(bank|post_office))",
-        restaurant="amenity:(restaurant|fast_food)",
-        bar="amenity:(cafe|bar|pub|biergarten)",
-        pharmacy="amenity:pharmacy",
-        fuel="amenity:fuel",
-        bicycle_parking="amenity:(bicycle_parking|bicycle_rental)",
-        charging_station="amenity:charging_station",
-        parking_entrance="amenity:parking_entrance",
-        atm="amenity:atm",
-        toilets="amenity:toilets",
-        vending_machine="amenity:vending_machine",
-        fountain="amenity:fountain",
-        waste_basket="amenity:(waste_basket|waste_disposal)",
-        bench="amenity:bench",
-        post_box="amenity:post_box",
-        artwork="tourism:artwork",
-        recycling="amenity:recycling",
-        give_way="highway:give_way",
-        clock="amenity:clock",
-        fire_hydrant="emergency:fire_hydrant",
-        pole="man_made:(flagpole|utility_pole)",
-        street_cabinet="man_made:street_cabinet",
+        node="node",
     )
     # + ways: kerb
 
 
 class Groups:
-    areas = list(Patterns.areas)
+    # areas = list(Patterns.areas)
     ways = list(Patterns.ways)
     nodes = list(Patterns.nodes)
 
 
 def group_elements(osm: OSMData):
     elem2group = {
-        "area": {},
+        # "area": {},
         "way": {},
         "node": {},
     }
@@ -239,17 +198,17 @@ def group_elements(osm: OSMData):
             continue  # missing
         elem2group["way"][way.id_] = group
 
-    for area in filter(filter_area, osm.ways.values()):
-        label = parse_area(area.tags)
-        if label is None:
-            continue
-        group = match_to_group(label, Patterns.areas)
-        if group is None:
-            group = match_to_group(label, Patterns.ways)
-        if group is None:
-            group = match_to_group(label, Patterns.nodes)
-        if group is None:
-            continue  # missing
-        elem2group["area"][area.id_] = group
+    # for area in filter(filter_area, osm.ways.values()):
+    #     label = parse_area(area.tags)
+    #     if label is None:
+    #         continue
+    #     group = match_to_group(label, Patterns.areas)
+    #     if group is None:
+    #         group = match_to_group(label, Patterns.ways)
+    #     if group is None:
+    #         group = match_to_group(label, Patterns.nodes)
+    #     if group is None:
+    #         continue  # missing
+    #     elem2group["area"][area.id_] = group
 
     return elem2group

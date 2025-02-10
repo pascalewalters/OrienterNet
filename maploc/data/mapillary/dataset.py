@@ -17,31 +17,7 @@ from omegaconf import DictConfig, OmegaConf
 from ... import DATASETS_PATH, logger
 from ...osm.tiling import TileManager
 from ..dataset import MapLocDataset
-from ..sequential import chunk_sequence
 from ..torch import collate, worker_init_fn
-
-
-def pack_dump_dict(dump):
-    for per_seq in dump.values():
-        if "points" in per_seq:
-            for chunk in list(per_seq["points"]):
-                points = per_seq["points"].pop(chunk)
-                if points is not None:
-                    per_seq["points"][chunk] = np.array(
-                        per_seq["points"][chunk], np.float64
-                    )
-        for view in per_seq["views"].values():
-            for k in ["R_c2w", "roll_pitch_yaw"]:
-                view[k] = np.array(view[k], np.float32)
-            for k in ["chunk_id"]:
-                if k in view:
-                    view.pop(k)
-        if "observations" in view:
-            view["observations"] = np.array(view["observations"])
-        for camera in per_seq["cameras"].values():
-            for k in ["params"]:
-                camera[k] = np.array(camera[k], np.float32)
-    return dump
 
 
 class MapillaryDataModule(pl.LightningDataModule):
@@ -53,7 +29,7 @@ class MapillaryDataModule(pl.LightningDataModule):
         **MapLocDataset.default_cfg,
         "name": "mapillary",
         # paths and fetch
-        "data_dir": DATASETS_PATH / "MGL",
+        "data_dir": DATASETS_PATH / "YYC",
         "local_dir": None,
         "tiles_filename": "tiles.pkl",
         "scenes": "???",
@@ -103,15 +79,38 @@ class MapillaryDataModule(pl.LightningDataModule):
         self.tile_managers = {}
         self.image_dirs = {}
         names = []
-
+        
+        
+        geojson_path = "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/combined-output.geojson"
+        with open(geojson_path, 'r') as f:
+            geojson_data = json.load(f)
+            
+        
         for scene in self.cfg.scenes:
             logger.info("Loading scene %s.", scene)
             dump_dir = self.root / scene
+            
+            self.dumps[scene] = {}
+            
+            for feature in geojson_data['features']:
+                if f"f_{feature['properties']['map']}" == scene:
+                    image_id = feature['properties']['imageUrl'].replace('.png', '')
+                    self.dumps[scene][image_id] = {
+                        'latitude': feature['geometry']['coordinates'][1],
+                        'longitude': feature['geometry']['coordinates'][0],
+                        'bearing': float(feature['properties']['bearing'])
+                    }
+                    names.append((scene, image_id))
+                    
+            
+            
             logger.info("Loading map tiles %s.", self.cfg.tiles_filename)
             self.tile_managers[scene] = TileManager.load(
                 dump_dir / self.cfg.tiles_filename
             )
             groups = self.tile_managers[scene].groups
+            
+            # TODO: ensure num_classes set to only wall for current dataset
             if self.cfg.num_classes:  # check consistency
                 if set(groups.keys()) != set(self.cfg.num_classes.keys()):
                     raise ValueError(
@@ -129,107 +128,68 @@ class MapillaryDataModule(pl.LightningDataModule):
                     "The tile manager and the config/model have different ground "
                     f"resolutions: {ppm} vs {self.cfg.pixel_per_meter}"
                 )
-
-            logger.info("Loading dump json file %s.", self.dump_filename)
-            with (dump_dir / self.dump_filename).open("r") as fp:
-                self.dumps[scene] = pack_dump_dict(json.load(fp))
-            for seq, per_seq in self.dumps[scene].items():
-                for cam_id, cam_dict in per_seq["cameras"].items():
-                    if cam_dict["model"] != "PINHOLE":
-                        raise ValueError(
-                            "Unsupported camera model: "
-                            f"{cam_dict['model']} for {scene},{seq},{cam_id}"
-                        )
+            
+            
 
             self.image_dirs[scene] = (
                 (self.local_dir or self.root) / scene / self.images_dirname
             )
             assert self.image_dirs[scene].exists(), self.image_dirs[scene]
 
-            for seq, data in self.dumps[scene].items():
-                for name in data["views"]:
-                    names.append((scene, seq, name))
+        print(f"Total number of images found: {len(names)}")
 
         self.parse_splits(self.cfg.split, names)
-        if self.cfg.filter_for is not None:
-            self.filter_elements()
+        # if self.cfg.filter_for is not None:
+        #     self.filter_elements()
         self.pack_data()
 
     def pack_data(self):
         # We pack the data into compact tensors
         # that can be shared across processes without copy.
-        exclude = {
-            "compass_angle",
-            "compass_accuracy",
-            "gps_accuracy",
-            "chunk_key",
-            "panorama_offset",
-        }
-        cameras = {
-            scene: {seq: per_seq["cameras"] for seq, per_seq in per_scene.items()}
-            for scene, per_scene in self.dumps.items()
-        }
-        points = {
-            scene: {
-                seq: {
-                    i: torch.from_numpy(p) for i, p in per_seq.get("points", {}).items()
-                }
-                for seq, per_seq in per_scene.items()
+        stage_data = {}  # Create a temporary dictionary
+        
+        # print(f"SPLITS ITEMS: {self.splits.items()}")
+        
+        for stage, names in self.splits.items():
+            print(f"Processing stage: {stage} with {len(names)} samples")
+            
+            stage_data[stage] = {
+                'latitude': [],
+                'longitude': [],
+                'bearing': []
             }
-            for scene, per_scene in self.dumps.items()
-        }
-        self.data = {}
-        for stage, names in self.splits.items():
-            view = self.dumps[names[0][0]][names[0][1]]["views"][names[0][2]]
-            data = {k: [] for k in view.keys() - exclude}
-            for scene, seq, name in names:
-                for k in data:
-                    data[k].append(self.dumps[scene][seq]["views"][name].get(k, None))
-            for k in data:
-                v = np.array(data[k])
-                if np.issubdtype(v.dtype, np.integer) or np.issubdtype(
-                    v.dtype, np.floating
-                ):
-                    v = torch.from_numpy(v)
-                data[k] = v
-            data["cameras"] = cameras
-            data["points"] = points
-            self.data[stage] = data
-            self.splits[stage] = np.array(names)
+            
+            for scene, image_id in names:
+                image_data = self.dumps[scene][image_id]
+                stage_data[stage]['latitude'].append(image_data['latitude'])
+                stage_data[stage]['longitude'].append(image_data['longitude'])
+                stage_data[stage]['bearing'].append(image_data['bearing'])
+                
+            # Convert to tensors
+            for k in stage_data[stage]:
+                stage_data[stage][k] = torch.tensor(stage_data[stage][k])
 
-    def filter_elements(self):
-        for stage, names in self.splits.items():
-            names_select = []
-            for scene, seq, name in names:
-                view = self.dumps[scene][seq]["views"][name]
-                if self.cfg.filter_for == "ground_plane":
-                    if not (1.0 <= view["height"] <= 3.0):
-                        continue
-                    planes = self.dumps[scene][seq].get("plane")
-                    if planes is not None:
-                        inliers = planes[str(view["chunk_id"])][-1]
-                        if inliers < 10:
-                            continue
-                    if self.cfg.filter_by_ground_angle is not None:
-                        plane = np.array(view["plane_params"])
-                        normal = plane[:3] / np.linalg.norm(plane[:3])
-                        angle = np.rad2deg(np.arccos(np.abs(normal[-1])))
-                        if angle > self.cfg.filter_by_ground_angle:
-                            continue
-                elif self.cfg.filter_for == "pointcloud":
-                    if len(view["observations"]) < self.cfg.min_num_points:
-                        continue
-                elif self.cfg.filter_for is not None:
-                    raise ValueError(f"Unknown filtering: {self.cfg.filter_for}")
-                names_select.append((scene, seq, name))
-            logger.info(
-                "%s: Keep %d/%d images after filtering for %s.",
-                stage,
-                len(names_select),
-                len(names),
-                self.cfg.filter_for,
-            )
-            self.splits[stage] = names_select
+            print(f"Packed {stage} data with {len(stage_data[stage]['latitude'])} samples")
+
+
+        save_path = "stage_data_structure.txt"
+        with open(save_path, 'w') as f:
+            f.write("Stage Data Structure:\n\n")
+            for stage in stage_data:
+                f.write(f"\nStage: {stage}\n")
+                f.write("-" * 50 + "\n")
+                for key, value in stage_data[stage].items():
+                    f.write(f"{key}:\n")
+                    f.write(f"  Type: {type(value)}\n")
+                    f.write(f"  Shape: {value.shape}\n")
+                    f.write(f"  First few values: {value[:5]}\n\n")
+
+        self.data = stage_data
+        
+        print(f"Final data structure keys: {self.data.keys()}")
+        for stage in self.data:
+            print(f"Data for {stage}: {self.data[stage].keys()}")
+
 
     def parse_splits(self, split_arg, names):
         if split_arg is None:
@@ -255,17 +215,27 @@ class MapillaryDataModule(pl.LightningDataModule):
         elif isinstance(split_arg, str):
             with (self.root / split_arg).open("r") as fp:
                 splits = json.load(fp)
+                
+            print(f"Loaded splits from {split_arg}: {list(splits.keys())}")
+                
             splits = {
-                k: {loc: set(ids) for loc, ids in split.items()}
+                k: {f"f_{loc}": set(ids) for loc, ids in split.items()}
                 for k, split in splits.items()
             }
+            
+            # print(f"Transformed splits structure: {splits}")
+            
             self.splits = {}
             for k, split in splits.items():
-                self.splits[k] = [
-                    n
-                    for n in names
-                    if n[0] in split and int(n[-1].rsplit("_", 1)[0]) in split[n[0]]
-                ]
+                matching_names = []
+                for n in names:
+                    scene_id, image_id = n
+                    
+                    image_id = image_id.replace('.jpg', '')
+                    
+                    if scene_id in split and image_id in split[scene_id]:
+                        matching_names.append(n)
+                self.splits[k] = matching_names
         else:
             raise ValueError(split_arg)
 
@@ -311,43 +281,3 @@ class MapillaryDataModule(pl.LightningDataModule):
 
     def test_dataloader(self, **kwargs):
         return self.dataloader("test", **kwargs)
-
-    def sequence_dataset(self, stage: str, **kwargs):
-        keys = self.splits[stage]
-        seq2indices = defaultdict(list)
-        for index, (_, seq, _) in enumerate(keys):
-            seq2indices[seq].append(index)
-        # chunk the sequences to the required length
-        chunk2indices = {}
-        for seq, indices in seq2indices.items():
-            chunks = chunk_sequence(self.data[stage], indices, **kwargs)
-            for i, sub_indices in enumerate(chunks):
-                chunk2indices[seq, i] = sub_indices
-        # store the index of each chunk in its sequence
-        chunk_indices = torch.full((len(keys),), -1)
-        for (_, chunk_index), idx in chunk2indices.items():
-            chunk_indices[idx] = chunk_index
-        self.data[stage]["chunk_index"] = chunk_indices
-        dataset = self.dataset(stage)
-        return dataset, chunk2indices
-
-    def sequence_dataloader(self, stage: str, shuffle: bool = False, **kwargs):
-        dataset, chunk2idx = self.sequence_dataset(stage, **kwargs)
-        chunk_keys = sorted(chunk2idx)
-        if shuffle:
-            perm = torch.randperm(len(chunk_keys))
-            chunk_keys = [chunk_keys[i] for i in perm]
-        key_indices = [i for key in chunk_keys for i in chunk2idx[key]]
-        num_workers = self.cfg["loading"][stage]["num_workers"]
-        loader = torchdata.DataLoader(
-            dataset,
-            batch_size=None,
-            sampler=key_indices,
-            num_workers=num_workers,
-            shuffle=False,
-            pin_memory=True,
-            persistent_workers=num_workers > 0,
-            worker_init_fn=worker_init_fn,
-            collate_fn=collate,
-        )
-        return loader, chunk_keys, chunk2idx

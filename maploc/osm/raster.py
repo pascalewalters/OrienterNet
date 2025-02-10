@@ -16,7 +16,7 @@ class Canvas:
         self.bbox = bbox
         self.ppm = ppm
         self.scaling = bbox.size * ppm
-        self.w, self.h = np.ceil(self.scaling).astype(int)
+        self.w, self.h = np.ceil(self.scaling.flatten()).astype(int)
         self.clear()
 
     def clear(self):
@@ -24,10 +24,12 @@ class Canvas:
 
     def to_uv(self, xy: np.ndarray):
         xy = self.bbox.normalize(xy)
+        # print(f"normalize: {xy}")
         xy[..., 1] = 1 - xy[..., 1]
-        s = self.scaling
+        s = self.scaling.flatten()
         if isinstance(xy, torch.Tensor):
             s = torch.from_numpy(s).to(xy)
+        # print(f"s: {xy * s - 0.5}")
         return xy * s - 0.5
 
     def to_xy(self, uv: np.ndarray):
@@ -62,29 +64,28 @@ class Canvas:
 def render_raster_masks(
     nodes: List[MapNode],
     lines: List[MapLine],
-    areas: List[MapArea],
+    #areas: List[MapArea],
     canvas: Canvas,
 ) -> Dict[str, np.ndarray]:
-    all_groups = Groups.areas + Groups.ways + Groups.nodes
+    all_groups = Groups.ways + Groups.nodes
     masks = {k: np.zeros((canvas.h, canvas.w), np.uint8) for k in all_groups}
 
-    for area in areas:
-        # canvas.raster = masks[area.group]
-        canvas.raster = masks['parking']
-        outlines = area.outers + area.inners
-        canvas.draw_multipolygon(outlines)
-        # if area.group == "building":
-        canvas.raster = masks["building_outline"]
-        # for line in outlines:
-        #     canvas.draw_line(line)
+    # for area in areas:
+    #     # canvas.raster = masks[area.group]
+    #     canvas.raster = masks['parking']
+    #     outlines = area.outers + area.inners
+    #     canvas.draw_multipolygon(outlines)
+    #     # if area.group == "building":
+    #     canvas.raster = masks["building_outline"]
+    #     # for line in outlines:
+    #     #     canvas.draw_line(line)
 
     for line in lines:
-        ##############
         canvas.raster = masks[line.group]
         canvas.draw_line(line.xy)
 
     for node in nodes:
-        canvas.raster = masks['grass']
+        canvas.raster = masks[node.group]
         canvas.draw_cell(node.xy)
 
     return masks
@@ -99,7 +100,7 @@ def mask_to_idx(group2mask: Dict[str, np.ndarray], groups: List[str]) -> np.ndar
 
 
 def render_raster_map(masks: Dict[str, np.ndarray]) -> np.ndarray:
-    areas = mask_to_idx(masks, Groups.areas)
+    #areas = mask_to_idx(masks, Groups.areas)
     ways = mask_to_idx(masks, Groups.ways)
     nodes = mask_to_idx(masks, Groups.nodes)
-    return np.stack([areas, ways, nodes])
+    return np.stack([ways, nodes])

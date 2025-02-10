@@ -120,6 +120,7 @@ class MapLine(MapElement):
     @classmethod
     def from_osm(cls, way: OSMWay, label: str, group: str):
         xy = np.stack([n.xy for n in way.nodes])
+        print(f"MapLine xy shape: {xy.shape}") 
         return cls(
             way.id_,
             label,
@@ -189,6 +190,7 @@ class MapData:
         
         for way in osm.ways.values():
         #for way in filter(filter_way, osm.ways.values()):
+            print(f"length of ways: {len(osm.ways.values())}")
             label = parse_way(way.tags)
             if label is None:
                 continue
@@ -198,10 +200,11 @@ class MapData:
             if group is None:
                 continue  # missing
             self.lines[way.id_] = MapLine.from_osm(way, label, group)
+            print(f"length of self.lines: {len(self.lines)}")
         
 
-        for rel in osm.relations.values():
-            self.areas[rel.id_] = MapArea.from_relation(rel, 'area', 'area', osm)
+        # for rel in osm.relations.values():
+        #     self.areas[rel.id_] = MapArea.from_relation(rel, 'area', 'area', osm)
 
         # for node in filter(filter_node, osm.nodes.values()):
         #     label = parse_node(node.tags)

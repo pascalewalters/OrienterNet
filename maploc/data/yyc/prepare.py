@@ -6,25 +6,18 @@ from pathlib import Path
 import numpy as np
 from tqdm.auto import tqdm
 import json
-import logging
-
-# from ... import logger
-# from ...osm.tiling import TileManager
-# from ...osm.viz import GeoPlotter
-# from ...utils.geo import BoundaryBox, Projection
-# from .dataset import YYCDataModule
-
-# Replace relative imports with absolute imports
 from maploc.osm.tiling import TileManager
 from maploc.utils.geo import BoundaryBox, Projection
 from maploc.data.yyc.dataset import YYCDataModule
 from maploc.osm.viz import GeoPlotter
+import logging
 
-# Setup logger instead of importing it
+# Set up logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
-
-
-split_files = ["test1_files.txt", "test2_files.txt", "train_files.txt"]
 
 
 def prepare_osm(
@@ -102,7 +95,8 @@ def prepare_osm(
     tile_manager.save(floor_output_path / 'tiles.pkl')
     
     # Create train/val/test splits for this floor
-    create_data_splits(floor_output_path, {'features': floor_features})
+    # SPLITS ARE CURRENTLY NOT CREATED FROM HERE
+    # create_data_splits(floor_output_path, {'features': floor_features})
     
     return tile_manager
 

@@ -1,40 +1,32 @@
 name: mapillary
 scenes:
-  - sanfrancisco_soma
-  - sanfrancisco_hayes
-  - amsterdam
-  - berlin
-  - lemans
-  - montrouge
-  - toulouse
-  - nantes
-  - vilnius
-  - avignon
-  - helsinki
-  - milan
-  - paris
-split: splits_MGL_13loc.json
+  - f_64ff43abbf8c6fef25f86282
+  - f_64ff43e17107d168de589c1a
+  - f_64ff44007107d168de589c1b
+  - f_6509bfcef7649384963d5949
+  - f_6509bfee66c66bc61ee6b49c
+  - f_6509c038f7649384963d594a
+split: image_splits.json
 loading:
   train:
-    batch_size: 12
+    batch_size: 1 # was 12 but OOM
     num_workers: ${.batch_size}
   val:
     batch_size: ${..train.batch_size}
     num_workers: ${.batch_size}
 # map data
 num_classes:
-  areas: 7
-  ways: 10
-  nodes: 33
+  nodes: 1
+  ways: 1
 pixel_per_meter: 2
 crop_size_meters: 64
 max_init_error: 48
 add_map_mask: true
 # preprocessing
-resize_image: 512
+resize_image: 128 # 512
 pad_to_square: true
 rectify_pitch: true
 augmentation:
   rot90: true
-  flip: true
+  flip: false # was true
   image: {apply: true}

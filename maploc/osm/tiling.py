@@ -32,26 +32,26 @@ class MapIndex:
             bbox = tuple(np.r_[line.xy.min(0), line.xy.max(0)])
             self.index_lines.insert(i, bbox)
 
-        self.index_areas = rtree.index.Index()
-        for i, area in data.areas.items():
-            xy = np.concatenate(area.outers + area.inners)
-            bbox = tuple(np.r_[xy.min(0), xy.max(0)])
-            self.index_areas.insert(i, bbox)
+        # self.index_areas = rtree.index.Index()
+        # for i, area in data.areas.items():
+        #     xy = np.concatenate(area.outers + area.inners)
+        #     bbox = tuple(np.r_[xy.min(0), xy.max(0)])
+        #     self.index_areas.insert(i, bbox)
 
         self.data = data
 
     def query(self, bbox: BoundaryBox) -> Tuple[List[OSMNode], List[OSMWay]]:
         query = tuple(np.r_[bbox.min_, bbox.max_])
         ret = []
-        for x in ["nodes", "lines", "areas"]:
+        for x in ["nodes", "lines"]:
             ids = getattr(self, "index_" + x).intersection(query)
             ret.append([getattr(self.data, x)[i] for i in ids])
         return tuple(ret)
 
 
 def bbox_to_slice(bbox: BoundaryBox, canvas: Canvas):
-    uv_min = np.ceil(canvas.to_uv(bbox.min_)).astype(int)
-    uv_max = np.ceil(canvas.to_uv(bbox.max_)).astype(int)
+    uv_min = np.ceil(canvas.to_uv(bbox.min_)).astype(int).flatten()
+    uv_max = np.ceil(canvas.to_uv(bbox.max_)).astype(int).flatten()
     slice_ = (slice(uv_max[1], uv_min[1]), slice(uv_min[0], uv_max[0]))
     return slice_
 
@@ -92,7 +92,7 @@ class TileManager:
         bbox: BoundaryBox,
         ppm: int,
         path: Optional[Path] = None,
-        tile_size: int = 128,
+        tile_size: int = 64,
     ):
         #bbox_osm = projection.unproject(bbox)
         if path is not None:            # and path.is_file():
@@ -104,14 +104,14 @@ class TileManager:
                 bbox = osm.box
                 # if osm.box is not None:
                 #     assert osm.box.contains(bbox_osm)
-        else:
-            # osm_dict = get_osm(bbox_osm, path)
-            # osm = OSMData.from_dict(get_osm(bbox_osm, path))
+        # else:
+        #     # osm_dict = get_osm(bbox_osm, path)
+        #     # osm = OSMData.from_dict(get_osm(bbox_osm, path))
 
-            with open('yyc_osm.json', 'r') as f:
-                osm_dict = json.load(f)
-            osm = OSMData.from_dict(osm_dict)
-            bbox = osm.box
+        #     with open('yyc_osm.json', 'r') as f:
+        #         osm_dict = json.load(f)
+        #     osm = OSMData.from_dict(osm_dict)
+        #     bbox = osm.box
 
         bbox = projection.project(bbox)
 
@@ -133,8 +133,8 @@ class TileManager:
         tiles = {}
         for ij, bbox_tile in bbox_tiles.items():
             canvas = Canvas(bbox_tile, ppm)
-            nodes, lines, areas = map_index.query(bbox_tile)
-            masks = render_raster_masks(nodes, lines, areas, canvas)
+            nodes, lines = map_index.query(bbox_tile)
+            masks = render_raster_masks(nodes, lines, canvas)
             canvas.raster = render_raster_map(masks)
             tiles[ij] = canvas
 
@@ -145,11 +145,12 @@ class TileManager:
     def query(self, bbox: BoundaryBox) -> Canvas:
         bbox = round_bbox(bbox, self.bbox.min_, self.ppm)
         canvas = Canvas(bbox, self.ppm)
-        raster = np.zeros((3, canvas.h, canvas.w), np.uint8)
+        raster = np.zeros((2, canvas.h, canvas.w), np.uint8) # 
 
         bbox_all = bbox & self.bbox
-        ij_min = np.floor((bbox_all.min_ - self.origin) / self.tile_size).astype(int)
-        ij_max = np.ceil((bbox_all.max_ - self.origin) / self.tile_size).astype(int) - 1
+        ij_min = np.floor((bbox_all.min_ - self.origin) / self.tile_size).astype(int).flatten()
+        ij_max = np.ceil((bbox_all.max_ - self.origin) / self.tile_size).astype(int).flatten() - 1
+        # print(f"ijmax: {ij_max[0]}////////// ijmin: {ij_max[0]}")
         for i in range(ij_min[0], ij_max[0] + 1):
             for j in range(ij_min[1], ij_max[1] + 1):
                 tile = self.tiles[i, j]

@@ -17,6 +17,7 @@ from ..utils.io import read_image
 from ..utils.wrappers import Camera
 from .image import pad_image, rectify_image, resize_image
 from .utils import decompose_rotmat, random_flip, random_rot90
+import torch.nn.functional as F
 
 
 class MapLocDataset(torchdata.Dataset):
@@ -31,7 +32,7 @@ class MapLocDataset(torchdata.Dataset):
         "crop_size_meters": "???",
         "max_init_error": "???",
         "max_init_error_rotation": None,
-        "init_from_gps": False,
+        "init_from_gps": True,
         "return_gps": False,
         "force_camera_height": None,
         # pose priors
@@ -95,63 +96,86 @@ class MapLocDataset(torchdata.Dataset):
             seed = [self.cfg.seed, idx]
         (seed,) = np.random.SeedSequence(seed).generate_state(1)
 
-        scene, seq, name = self.names[idx]
-        if self.cfg.init_from_gps:
-            latlon_gps = self.data["gps_position"][idx][:2].clone().numpy()
+        scene, image_id = self.names[idx]
+        
+        if self.cfg.init_from_gps:            
+            latlon_gps = [
+                torch.tensor([
+                    self.data['latitude'][idx],
+                    self.data['longitude'][idx]
+                ]).numpy()
+            ]
+            # print(f"latlong coords: {latlon_gps}")
             xy_w_init = self.tile_managers[scene].projection.project(latlon_gps)
-        else:
-            xy_w_init = self.data["t_c2w"][idx][:2].clone().double().numpy()
+            
+            bearing = self.data['bearing'][idx]
 
-        if "shifts" in self.data:
-            yaw = self.data["roll_pitch_yaw"][idx][-1]
-            R_c2w = rotmat2d((90 - yaw) / 180 * np.pi).float()
-            error = (R_c2w @ self.data["shifts"][idx][:2]).numpy()
-        else:
-            error = np.random.RandomState(seed).uniform(-1, 1, size=2)
-        xy_w_init += error * self.cfg.max_init_error
+
+        # error = np.random.RandomState(seed).uniform(-1, 1, size=2)
+        # xy_w_init += error * self.cfg.max_init_error
 
         bbox_tile = BoundaryBox(
             xy_w_init - self.cfg.crop_size_meters,
             xy_w_init + self.cfg.crop_size_meters,
         )
-        return self.get_view(idx, scene, seq, name, seed, bbox_tile)
+        # print(f"BBOX TILE min: {bbox_tile.min_}, max: {bbox_tile.max_}")
+        return self.get_view(idx, scene, image_id, seed, bbox_tile)
 
-    def get_view(self, idx, scene, seq, name, seed, bbox_tile):
+    def get_view(self, idx, scene, image_id, seed, bbox_tile):
+        print(f"\nDatapoint {idx}:")
+        print(f"Scene (Building): {scene}")
+        print(f"Image ID (Floor): {image_id}")
         data = {
             "index": idx,
-            "name": name,
+            "name": image_id,
             "scene": scene,
-            "sequence": seq,
+            #"sequence": None,
+        } 
+
+        # Simple orientation from bearing
+        roll, pitch = 0.0, 0.0  # Assuming flat ground
+        yaw = self.data['bearing'][idx]  # Use bearing as yaw
+        
+        # Load and process image
+        image = read_image(self.image_dirs[scene] / (image_id))
+        
+        # Create camera parameters for the image
+        h, w = image.shape[:2]  # Get image dimensions
+        cam_dict = {
+            "model": "SIMPLE_RADIAL",
+            "width": w,
+            "height": h,
+            "params": np.array([
+                max(w, h) * 0.93,  # focal length estimate (based on ~66 degree FOV)
+                w/2,               # cx (principal point x)
+                h/2,               # cy (principal point y)
+                0.1                # k1 (radial distortion)
+            ])
         }
-        cam_dict = self.data["cameras"][scene][seq][self.data["camera_id"][idx]]
         cam = Camera.from_dict(cam_dict).float()
-
-        if "roll_pitch_yaw" in self.data:
-            roll, pitch, yaw = self.data["roll_pitch_yaw"][idx].numpy()
-        else:
-            roll, pitch, yaw = decompose_rotmat(self.data["R_c2w"][idx].numpy())
-        image = read_image(self.image_dirs[scene] / (name + self.image_ext))
-
-        if "plane_params" in self.data:
-            # transform the plane parameters from world to camera frames
-            plane_w = self.data["plane_params"][idx]
-            data["ground_plane"] = torch.cat(
-                [rotmat2d(deg2rad(torch.tensor(yaw))) @ plane_w[:2], plane_w[2:]]
-            )
-        if self.cfg.force_camera_height is not None:
-            data["camera_height"] = torch.tensor(self.cfg.force_camera_height)
-        elif "camera_height" in self.data:
-            data["camera_height"] = self.data["height"][idx].clone()
+        image, valid = self.process_image(image, seed)
 
         # raster extraction
         canvas = self.tile_managers[scene].query(bbox_tile)
-        xy_w_gt = self.data["t_c2w"][idx][:2].numpy()
+        
+        # Get ground truth position from lat/long
+        latlon_gt = torch.tensor([
+            self.data['latitude'][idx],
+            self.data['longitude'][idx]
+        ]).numpy()
+        
+        # world coordinates
+        xy_w_gt = self.tile_managers[scene].projection.project(latlon_gt)
+        
         uv_gt = canvas.to_uv(xy_w_gt)
         uv_init = canvas.to_uv(bbox_tile.center)
-        raster = canvas.raster  # C, H, W
+        raster = canvas.raster
+        
+        if uv_gt.ndim > 1:
+            uv_gt = uv_gt.squeeze() 
 
-        # Map augmentations
-        heading = np.deg2rad(90 - yaw)  # fixme
+        # Map augmentations for training
+        heading = np.deg2rad(90 - yaw)
         if self.stage == "train":
             if self.cfg.augmentation.rot90:
                 raster, uv_gt, heading = random_rot90(raster, uv_gt, heading, seed)
@@ -159,99 +183,77 @@ class MapLocDataset(torchdata.Dataset):
                 image, raster, uv_gt, heading = random_flip(
                     image, raster, uv_gt, heading, seed
                 )
-        yaw = 90 - np.rad2deg(heading)  # fixme
+        yaw = 90 - np.rad2deg(heading)
 
-        image, valid, cam, roll, pitch = self.process_image(
-            image, cam, roll, pitch, seed
-        )
-
-        # Create the mask for prior location
+        # Optional: create mask for search area
         if self.cfg.add_map_mask:
             data["map_mask"] = torch.from_numpy(self.create_map_mask(canvas))
 
-        if self.cfg.max_init_error_rotation is not None:
-            if "shifts" in self.data:
-                error = self.data["shifts"][idx][-1]
-            else:
-                error = np.random.RandomState(seed + 1).uniform(-1, 1)
-                error = torch.tensor(error, dtype=torch.float)
-            yaw_init = yaw + error * self.cfg.max_init_error_rotation
-            range_ = self.cfg.prior_range_rotation or self.cfg.max_init_error_rotation
-            data["yaw_prior"] = torch.stack([yaw_init, torch.tensor(range_)])
-
-        if self.cfg.return_gps:
-            gps = self.data["gps_position"][idx][:2].numpy()
-            xy_gps = self.tile_managers[scene].projection.project(gps)
-            data["uv_gps"] = torch.from_numpy(canvas.to_uv(xy_gps)).float()
-            data["accuracy_gps"] = torch.tensor(
-                min(self.cfg.accuracy_gps, self.cfg.crop_size_meters)
-            )
-
-        if "chunk_index" in self.data:
-            data["chunk_id"] = (scene, seq, self.data["chunk_index"][idx])
-
         return {
             **data,
-            "image": image,
-            "valid": valid,
-            "camera": cam,
+            "image": image.cpu(),
+            "valid": valid.cpu(),
+            "camera": cam.cpu(),
             "canvas": canvas,
-            "map": torch.from_numpy(np.ascontiguousarray(raster)).long(),
-            "uv": torch.from_numpy(uv_gt).float(),  # TODO: maybe rename to uv?
-            "uv_init": torch.from_numpy(uv_init).float(),  # TODO: maybe rename to uv?
-            "roll_pitch_yaw": torch.tensor((roll, pitch, yaw)).float(),
-            "pixels_per_meter": torch.tensor(canvas.ppm).float(),
+            "map": torch.from_numpy(np.ascontiguousarray(raster)).long().cpu(),
+            "uv": torch.from_numpy(uv_gt).float().cpu(),
+            "uv_init": torch.from_numpy(uv_init).float().cpu(),
+            "roll_pitch_yaw": torch.tensor((roll, pitch, yaw)).float().cpu(),
+            "pixels_per_meter": torch.tensor(canvas.ppm).float().cpu(),
         }
 
-    def process_image(self, image, cam, roll, pitch, seed):
+    def process_image(self, image, seed):
+        # Convert to tensor and normalize
         image = (
             torch.from_numpy(np.ascontiguousarray(image))
-            .permute(2, 0, 1)
+            .permute(2, 0, 1)  # CHW format
             .float()
             .div_(255)
         )
-        image, valid = rectify_image(
-            image, cam, roll, pitch if self.cfg.rectify_pitch else None
-        )
-        roll = 0.0
-        if self.cfg.rectify_pitch:
-            pitch = 0.0
+        
+        # Create valid mask (all pixels are valid)
+        valid = torch.ones_like(image[0], dtype=torch.bool)
 
-        if self.cfg.target_focal_length is not None:
-            # resize to a canonical focal length
-            factor = self.cfg.target_focal_length / cam.f.numpy()
-            size = (np.array(image.shape[-2:][::-1]) * factor).astype(int)
-            image, _, cam, valid = resize_image(image, size, camera=cam, valid=valid)
-            size_out = self.cfg.resize_image
-            if size_out is None:
-                # round the edges up such that they are multiple of a factor
-                stride = self.cfg.pad_to_multiple
-                size_out = (np.ceil((size / stride)) * stride).astype(int)
-            # crop or pad such that both edges are of the given size
-            image, valid, cam = pad_image(
-                image, size_out, cam, valid, crop_and_center=True
-            )
-        elif self.cfg.resize_image is not None:
-            image, _, cam, valid = resize_image(
-                image, self.cfg.resize_image, fn=max, camera=cam, valid=valid
-            )
-            if self.cfg.pad_to_square:
-                # pad such that both edges are of the given size
-                image, valid, cam = pad_image(image, self.cfg.resize_image, cam, valid)
-
-        if self.cfg.reduce_fov is not None:
+        # Resize if needed
+        if self.cfg.resize_image is not None:
+            target_size = self.cfg.resize_image
+            
+            # First resize maintaining aspect ratio
             h, w = image.shape[-2:]
-            f = float(cam.f[0])
-            fov = np.arctan(w / f / 2)
-            w_new = round(2 * f * np.tan(self.cfg.reduce_fov * fov))
-            image, valid, cam = pad_image(
-                image, (w_new, h), cam, valid, crop_and_center=True
-            )
+            scale = target_size / max(h, w)
+            new_h = int(h * scale)
+            new_w = int(w * scale)
+            
+            # Resize keeping aspect ratio
+            image = F.interpolate(
+                image.unsqueeze(0),
+                size=(new_h, new_w),
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(0)
+            
+            valid = F.interpolate(
+                valid.unsqueeze(0).unsqueeze(0).float(),
+                size=(new_h, new_w),
+                mode='nearest'
+            ).squeeze(0).squeeze(0).bool()
+            
+            # Create padded tensors
+            padded_image = torch.zeros((3, target_size, target_size), dtype=image.dtype)
+            padded_valid = torch.zeros((target_size, target_size), dtype=valid.dtype)
+            
+            # Calculate padding
+            pad_h = (target_size - new_h) // 2
+            pad_w = (target_size - new_w) // 2
+            
+            # Copy resized image into center of padded tensor
+            padded_image[:, pad_h:pad_h+new_h, pad_w:pad_w+new_w] = image
+            padded_valid[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = valid
+            
+            image = padded_image
+            valid = padded_valid
 
-        with torch.random.fork_rng(devices=[]):
-            torch.manual_seed(seed)
-            image = self.tfs(image)
-        return image, valid, cam, roll, pitch
+        return image, valid
 
     def create_map_mask(self, canvas):
         map_mask = np.zeros(canvas.raster.shape[-2:], bool)

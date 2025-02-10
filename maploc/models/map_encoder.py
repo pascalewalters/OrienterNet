@@ -51,7 +51,7 @@ class MapEncoder(BaseModel):
     def _forward(self, data):
         embeddings = [
             self.embeddings[k](data["map"][:, i])
-            for i, k in enumerate(("areas", "ways", "nodes"))
+            for i, k in enumerate(("ways", "nodes"))
         ]
         embeddings = torch.cat(embeddings, dim=-1).permute(0, 3, 1, 2)
         if isinstance(self.encoder, BaseModel):
