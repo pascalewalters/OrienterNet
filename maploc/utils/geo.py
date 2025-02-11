@@ -18,12 +18,12 @@ class BoundaryBox:
             problem_indices = np.where(self.min_ > self.max_)[0]
             for idx in problem_indices:
                 print(f"Invalid boundary at index {idx}: min({self.min_[idx]}) > max({self.max_[idx]})")
-        #     raise ValueError(f"BoundaryBox min values must be <= max values\n"
-        #                    f"min_: {self.min_}\n"
-        #                    f"max_: {self.max_}")
+            raise ValueError(f"BoundaryBox min values must be <= max values\n"
+                           f"min_: {self.min_}\n"
+                           f"max_: {self.max_}")
 
-        # # Original assert
-        # assert np.all(self.min_ <= self.max_)
+        # Original assert
+        assert np.all(self.min_ <= self.max_)
 
     @classmethod
     def from_string(cls, string: str):

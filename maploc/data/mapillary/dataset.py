@@ -21,7 +21,7 @@ from ..torch import collate, worker_init_fn
 
 
 class MapillaryDataModule(pl.LightningDataModule):
-    dump_filename = "dump.json"
+    # dump_filename = "dump.json"
     images_archive = "images.tar.gz"
     images_dirname = "images/"
 
@@ -59,7 +59,7 @@ class MapillaryDataModule(pl.LightningDataModule):
     def prepare_data(self):
         for scene in self.cfg.scenes:
             dump_dir = self.root / scene
-            assert (dump_dir / self.dump_filename).exists(), dump_dir
+            # assert (dump_dir / self.dump_filename).exists(), dump_dir
             assert (dump_dir / self.cfg.tiles_filename).exists(), dump_dir
             if self.local_dir is None:
                 assert (dump_dir / self.images_dirname).exists(), dump_dir

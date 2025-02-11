@@ -62,10 +62,8 @@ def create_osm_for_floor(floor_id, floor_name, mvf_folder):
         'maxlon': float(max_lon)
     }
     
-    # Create osms directory if it doesn't exist
     os.makedirs('yyc_osms', exist_ok=True)
     
-    # Save the OSM file with floor name in osms folder
     with open(os.path.join('yyc_osms', f'{floor_name}_osm.json'), 'w') as f:
         json.dump(output_dict, f)
 
@@ -77,7 +75,6 @@ def main():
     # Get unique map IDs
     map_ids = set(feature['properties']['map'] for feature in maps['features'])
     
-    # Load floor data
     mvf_folder = "/home/kevinmeng/workspace/mappedin/VPS/MVF/YYC"
     with open(os.path.join(mvf_folder, "floor.geojson"), 'r') as f:
         floors = json.load(f)

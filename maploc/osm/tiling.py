@@ -92,9 +92,9 @@ class TileManager:
         bbox: BoundaryBox,
         ppm: int,
         path: Optional[Path] = None,
-        tile_size: int = 64,
+        tile_size: int = 128,
     ):
-        #bbox_osm = projection.unproject(bbox)
+        # bbox_osm = projection.unproject(bbox)
         if path is not None:            # and path.is_file():
             # path = Path(path).resolve()
             if path.is_file():
@@ -111,7 +111,6 @@ class TileManager:
         #     with open('yyc_osm.json', 'r') as f:
         #         osm_dict = json.load(f)
         #     osm = OSMData.from_dict(osm_dict)
-        #     bbox = osm.box
 
         bbox = projection.project(bbox)
 

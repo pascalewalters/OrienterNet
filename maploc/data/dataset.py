@@ -108,7 +108,6 @@ class MapLocDataset(torchdata.Dataset):
             # print(f"latlong coords: {latlon_gps}")
             xy_w_init = self.tile_managers[scene].projection.project(latlon_gps)
             
-            bearing = self.data['bearing'][idx]
 
 
         # error = np.random.RandomState(seed).uniform(-1, 1, size=2)
@@ -242,11 +241,9 @@ class MapLocDataset(torchdata.Dataset):
             padded_image = torch.zeros((3, target_size, target_size), dtype=image.dtype)
             padded_valid = torch.zeros((target_size, target_size), dtype=valid.dtype)
             
-            # Calculate padding
             pad_h = (target_size - new_h) // 2
             pad_w = (target_size - new_w) // 2
             
-            # Copy resized image into center of padded tensor
             padded_image[:, pad_h:pad_h+new_h, pad_w:pad_w+new_w] = image
             padded_valid[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = valid
             
