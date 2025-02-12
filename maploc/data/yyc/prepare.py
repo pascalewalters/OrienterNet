@@ -4,27 +4,24 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-from tqdm.auto import tqdm
 import json
 from maploc.osm.tiling import TileManager
 from maploc.utils.geo import BoundaryBox, Projection
-from maploc.data.yyc.dataset import YYCDataModule
 from maploc.osm.viz import GeoPlotter
 import logging
-import os
 import shutil
 from collections import defaultdict
 import random
+from omegaconf import OmegaConf
 
-# Set up logger
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-def train_val_split(geojson_path, output_path):
-    with open(geojson_path, 'r') as f:
+def train_val_split(combined_geojson_path, output_path):
+    with open(combined_geojson_path, 'r') as f:
         data = json.load(f)
 
     images_by_map = defaultdict(list)
@@ -53,10 +50,10 @@ def train_val_split(geojson_path, output_path):
     with open(splits_path, 'w') as f:
         json.dump(split_data, f, indent=2)
 
-def split_photos_by_map(geojson_path, photos_dir, output_path):
+def split_photos_by_map(combined_geojson_path, photos_dir, output_path):
     """Organize photos into floor-specific directories."""
     # Read and parse the geojson file
-    with open(geojson_path, 'r') as f:
+    with open(combined_geojson_path, 'r') as f:
         data = json.load(f)
 
     # Dictionary to keep track of photos count per map
@@ -94,8 +91,7 @@ def split_photos_by_map(geojson_path, photos_dir, output_path):
 
 def prepare_osm(
     osm_path,
-    geojson_path,
-    data_dir,
+    combined_geojson_path,
     output_path,
     floor_id,
     tile_margin=512,
@@ -105,7 +101,7 @@ def prepare_osm(
         osm_data = json.load(f)
         
     # Load image locations from GeoJSON
-    with open(geojson_path, 'r') as f:
+    with open(combined_geojson_path, 'r') as f:
         geojson_data = json.load(f)
         
     floor_features = [
@@ -175,60 +171,51 @@ def prepare_osm(
 
     tile_manager.save(floor_output_path / 'tiles.pkl')
     
-    
     return tile_manager
             
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--data_dir", 
-        type=Path, 
-        default="./datasets/YYC"
-    )
+    parser.add_argument("--config", type=str, default="maploc/conf/data/yyc.yaml")
     parser.add_argument("--pixel_per_meter", type=int, default=2)
-    parser.add_argument("--osm_dir", 
-                        type=Path, 
-                        default="/home/kevinmeng/workspace/mappedin/VPS/OrienterNet/yyc_osms")
-    parser.add_argument("--geojson_path", 
-                       type=Path,
-                       default="/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/combined-output.geojson"
-                    )
-    parser.add_argument("--photos_dir",
-                        type=Path,
-                        default="/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/photos"
-                    )
-    
     args = parser.parse_args()
+
+    # Load config
+    cfg = OmegaConf.load(args.config)
+    
+    # Access paths from config
+    data_dir = Path(cfg.paths.data_dir)
+    osm_dir = Path(cfg.paths.osm_dir)
+    combined_geojson_path = Path(cfg.paths.combined_geojson_path)
+    photos_dir = Path(cfg.paths.photos_dir)
     
     logger.info("Organizing photos into respective floor ID folder")
-    split_photos_by_map(args.geojson_path, args.photos_dir, args.data_dir)
+    split_photos_by_map(combined_geojson_path, photos_dir, data_dir)
     
     logger.info("Creating train/val splits...")
-    train_val_split(args.geojson_path, args.data_dir)
+    train_val_split(combined_geojson_path, data_dir)
 
     
     # Process each OSM file in the directory
-    for osm_file in args.osm_dir.glob('*_osm.json'):
+    for osm_file in osm_dir.glob('*_osm.json'):
         # Extract floor ID from filename
         floor_id = osm_file.stem.replace('_osm', '')
         
         logger.info(f"Processing floor: {floor_id}")
         
         # Create floor-specific output directory
-        floor_data_dir = args.data_dir / floor_id
+        floor_data_dir = data_dir / floor_id
         
         if not osm_file.exists():
             raise FileNotFoundError(f"No OSM data file at {osm_file}")
-        if not args.geojson_path.exists():
-            raise FileNotFoundError(f"No GeoJSON file at {args.geojson_path}")
+        if not combined_geojson_path.exists():
+            raise FileNotFoundError(f"No GeoJSON file at {combined_geojson_path}")
         
         
         prepare_osm(
-            osm_file,
-            args.geojson_path,
-            floor_data_dir,
-            args.data_dir,
-            floor_id,
+            osm_path=osm_file,
+            combined_geojson_path=combined_geojson_path,
+            output_path=data_dir,
+            floor_id=floor_id,
             ppm=args.pixel_per_meter
         )
     

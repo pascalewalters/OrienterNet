@@ -1,8 +1,10 @@
 import json
-import numpy as np
 import os
+import argparse
+from omegaconf import OmegaConf
+from pathlib import Path
 
-def create_osm_for_floor(floor_id, floor_name, mvf_folder):
+def create_osm_for_floor(floor_id, floor_name, mvf_folder, osm_dir):
     output_dict = {}
     output_dict['elements'] = []
     
@@ -62,21 +64,32 @@ def create_osm_for_floor(floor_id, floor_name, mvf_folder):
         'maxlon': float(max_lon)
     }
     
-    os.makedirs('yyc_osms', exist_ok=True)
+    os.makedirs(osm_dir, exist_ok=True)
     
-    with open(os.path.join('yyc_osms', f'{floor_name}_osm.json'), 'w') as f:
+    with open(os.path.join(osm_dir, f'{floor_name}_osm.json'), 'w') as f:
         json.dump(output_dict, f)
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="maploc/conf/data/yyc.yaml")
+    args = parser.parse_args()
+
+    # Load config
+    cfg = OmegaConf.load(args.config)
+    
+    # Access paths from config
+    osm_dir = Path(cfg.paths.osm_dir)
+    combined_geojson_path = Path(cfg.paths.combined_geojson_path)
+    mvf_dir = Path(cfg.paths.mvf_dir)
+    
     # Load the map IDs from combined-output.geojson
-    with open("/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/combined-output.geojson", 'r') as f:
+    with open(combined_geojson_path, 'r') as f:
         maps = json.load(f)
     
     # Get unique map IDs
     map_ids = set(feature['properties']['map'] for feature in maps['features'])
     
-    mvf_folder = "/home/kevinmeng/workspace/mappedin/VPS/MVF/YYC"
-    with open(os.path.join(mvf_folder, "floor.geojson"), 'r') as f:
+    with open(os.path.join(mvf_dir, "floor.geojson"), 'r') as f:
         floors = json.load(f)
     
     # Create mapping of floor IDs to names
@@ -91,7 +104,7 @@ def main():
         if map_id in floor_names:
             floor_name = floor_names[map_id]
             print(f"Processing floor: {floor_name} (ID: {map_id})")
-            create_osm_for_floor(map_id, floor_name, mvf_folder)
+            create_osm_for_floor(map_id, floor_name, mvf_dir, osm_dir)
         else:
             print(f"Warning: No floor name found for map ID: {map_id}")
 

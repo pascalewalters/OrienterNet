@@ -1,23 +1,38 @@
 name: yyc
+paths: 
+  data_dir: "./datasets/YYC"
+  osm_dir: "/home/kevinmeng/workspace/mappedin/VPS/OrienterNet/yyc_osms"
+  combined_geojson_path: "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/combined-output.geojson"
+  photos_dir: "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/photos"
+  mvf_dir: "/home/kevinmeng/workspace/mappedin/VPS/MVF/YYC"
+scenes:
+  - f_64ff43abbf8c6fef25f86282
+  - f_64ff43e17107d168de589c1a
+  - f_64ff44007107d168de589c1b
+  - f_6509bfcef7649384963d5949
+  - f_6509bfee66c66bc61ee6b49c
+  - f_6509c038f7649384963d594a
+split: image_splits.json
 loading:
   train:
-    batch_size: 9
+    batch_size: 1 # was 12 but OOM
     num_workers: ${.batch_size}
   val:
     batch_size: ${..train.batch_size}
     num_workers: ${.batch_size}
 # map data
 num_classes:
-  walls: 1
+  nodes: 1
+  ways: 1
 pixel_per_meter: 2
 crop_size_meters: 64
-max_init_error: 32
+max_init_error: 48
+add_map_mask: true
 # preprocessing
-target_focal_length: 256
-resize_image: [400, 300]  # multiple of 32 at f=256px
-# pad_to_multiple: 32
+resize_image: 128 # 512
+pad_to_square: true
 rectify_pitch: true
 augmentation:
   rot90: true
-  flip: true
+  flip: false # was true
   image: {apply: true}

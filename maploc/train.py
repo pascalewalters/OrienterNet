@@ -159,7 +159,7 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
                 (cfg.data["loading"][split].num_workers + cfg.experiment.gpus - 1)
                 / cfg.experiment.gpus
             )
-    data = data_modules[cfg.data.get("name", "mapillary")](cfg.data)
+    data = data_modules[cfg.data.get("name", "yyc")](cfg.data)
 
     tb_args = {"name": cfg.experiment.name, "version": ""}
     tb = pl.loggers.TensorBoardLogger(EXPERIMENTS_PATH, **tb_args)

@@ -27,7 +27,7 @@ class MapillaryDataModule(pl.LightningDataModule):
 
     default_cfg = {
         **MapLocDataset.default_cfg,
-        "name": "mapillary",
+        "name": "yyc",
         # paths and fetch
         "data_dir": DATASETS_PATH / "YYC",
         "local_dir": None,
