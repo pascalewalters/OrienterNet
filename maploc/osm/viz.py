@@ -107,7 +107,7 @@ map_colors = {
 
 
 class Colormap:
-    colors_areas = np.stack([map_colors[k] for k in ["void"] + Groups.areas])
+    # colors_areas = np.stack([map_colors[k] for k in ["void"] + Groups.areas])
     colors_ways = np.stack([map_colors[k] for k in ["void"] + Groups.ways])
 
     @classmethod
@@ -116,7 +116,7 @@ class Colormap:
             np.where(
                 rasters[1, ..., None] > 0,
                 cls.colors_ways[rasters[1]],
-                cls.colors_areas[rasters[0]],
+                # cls.colors_areas[rasters[0]],
             )
             / 255.0
         )
@@ -124,7 +124,7 @@ class Colormap:
     @classmethod
     def add_colorbar(cls):
         ax2 = plt.gcf().add_axes([1, 0.1, 0.02, 0.8])
-        color_list = np.r_[cls.colors_areas[1:], cls.colors_ways[1:]] / 255.0
+        color_list = np.r_[cls.colors_ways[1:]] / 255.0
         cmap = mpl.colors.ListedColormap(color_list[::-1])
         ticks = np.linspace(0, 1, len(color_list), endpoint=False)
         ticks += 1 / len(color_list) / 2
@@ -134,7 +134,7 @@ class Colormap:
             orientation="vertical",
             ticks=ticks,
         )
-        cb.set_ticklabels((Groups.areas + Groups.ways)[::-1])
+        cb.set_ticklabels((Groups.ways)[::-1])
         ax2.tick_params(labelsize=15)
 
 
