@@ -121,9 +121,6 @@ class MapLocDataset(torchdata.Dataset):
         return self.get_view(idx, scene, image_id, seed, bbox_tile)
 
     def get_view(self, idx, scene, image_id, seed, bbox_tile):
-        print(f"\nDatapoint {idx}:")
-        print(f"Scene (Building): {scene}")
-        print(f"Image ID (Floor): {image_id}")
         data = {
             "index": idx,
             "name": image_id,

@@ -4,12 +4,6 @@ defaults:
   - training
   - _self_
 
-clearml:
-  project_name: "OrienterNet"
-  task_name: "orienternet_training"
-  output_uri: true
-  dataset_id: 364ef9e1cbb147ce974963fc8a451668
-
 model:
   name: orienternet
   latent_dim: 64 # 128

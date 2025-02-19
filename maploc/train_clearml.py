@@ -16,6 +16,26 @@ from .module import GenericModule
 from clearml import Task, Dataset
 
 
+class ClearMLCallback(pl.callbacks.Callback):
+    @rank_zero_only
+    def on_train_epoch_end(self, trainer, pl_module):
+        current_epoch = pl_module.current_epoch
+        # Add debug print
+        print(f"Reporting epoch {current_epoch} as iteration")
+        task = Task.current_task()
+        if task:
+            results = {
+                **dict(pl_module.metrics_val.items()),
+                **dict(pl_module.losses_val.items()),
+            }
+            for k, v in results.items():
+                task.get_logger().report_scalar(
+                    title=k,
+                    series="Validation",
+                    value=v.compute(),
+                    iteration=current_epoch
+                )
+
 class CleanProgressBar(pl.callbacks.TQDMProgressBar):
     def get_metrics(self, trainer, model):
         items = super().get_metrics(trainer, model)
@@ -108,11 +128,17 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
                     task_name=cfg.experiment.name,
                     output_uri=True)
     
+    task.force_requirements_env_freeze(force=True, requirements_file=None)
+    
     task.connect(cfg)
-    if cfg.data.get("clearml_dataset_id"):
-        dataset = Dataset.get(dataset_id=cfg.data.clearml_dataset_id)
+    
+    # Check if clearml dataset_id exists in the config
+    if cfg.clearml.dataset_id:
+        dataset = Dataset.get(dataset_id=cfg.clearml.dataset_id)
         local_data_path = dataset.get_local_copy()
-        cfg.data.root = local_data_path    
+        # Update the data_dir path in the nested config
+        cfg.data.paths.data_dir = str(local_data_path)
+        cfg.data.paths.combined_geojson_path = str(local_data_path) + "/combined-output.geojson"
     
     torch.set_float32_matmul_precision("medium")
     OmegaConf.resolve(cfg)
@@ -170,7 +196,7 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
                 (cfg.data["loading"][split].num_workers + cfg.experiment.gpus - 1)
                 / cfg.experiment.gpus
             )
-    data = data_modules[cfg.data.get("name", "mapillary")](cfg.data)
+    data = data_modules[cfg.data.get("name", "yyc")](cfg.data)
 
     tb_args = {"name": cfg.experiment.name, "version": ""}
     tb = pl.loggers.TensorBoardLogger(EXPERIMENTS_PATH, **tb_args)
@@ -180,8 +206,9 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
         checkpointing_step,
         pl.callbacks.LearningRateMonitor(),
         SeedingCallback(),
-        CleanProgressBar(),
+        # CleanProgressBar(),
         ConsoleLogger(),
+        ClearMLCallback(),
     ]
     if cfg.experiment.gpus > 0:
         callbacks.append(pl.callbacks.DeviceStatsMonitor())
@@ -192,10 +219,11 @@ def train(cfg: DictConfig, job_id: Optional[int] = None):
         enable_model_summary=False,
         sync_batchnorm=True,
         enable_checkpointing=True,
+        enable_progress_bar=False,
         logger=tb,
         callbacks=callbacks,
         strategy=strategy,
-        check_val_every_n_epoch=1,
+        # check_val_every_n_epoch=1,
         accelerator="gpu",
         num_nodes=1,
         **cfg.training.trainer,

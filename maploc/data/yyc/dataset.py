@@ -55,9 +55,11 @@ class YYCDataModule(pl.LightningDataModule):
         default_cfg = OmegaConf.create(self.default_cfg)
         OmegaConf.set_struct(default_cfg, True)  # cannot add new keys
         self.cfg = OmegaConf.merge(default_cfg, cfg)
-        self.root = Path(self.cfg.paths.data_dir)
+            
         self.local_dir = self.cfg.local_dir or os.environ.get("TMPDIR")
+        
         self.data_dir = Path(self.cfg.paths.data_dir)
+            
         if self.local_dir is not None:
             self.local_dir = Path(self.local_dir, "YYC")
         if self.cfg.crop_size_meters < self.cfg.max_init_error:
@@ -65,7 +67,7 @@ class YYCDataModule(pl.LightningDataModule):
 
     def prepare_data(self):
         for scene in self.cfg.scenes:
-            dump_dir = self.root / scene
+            dump_dir = self.data_dir / scene
             # assert (dump_dir / self.dump_filename).exists(), dump_dir
             assert (dump_dir / self.cfg.tiles_filename).exists(), dump_dir
             if self.local_dir is None:
@@ -95,7 +97,7 @@ class YYCDataModule(pl.LightningDataModule):
         
         for scene in self.cfg.scenes:
             logger.info("Loading scene %s.", scene)
-            dump_dir = self.root / scene
+            dump_dir = self.data_dir / scene
             
             self.dumps[scene] = {}
             
@@ -139,7 +141,7 @@ class YYCDataModule(pl.LightningDataModule):
             
 
             self.image_dirs[scene] = (
-                (self.local_dir or self.root) / scene / self.images_dirname
+                (self.local_dir or self.data_dir) / scene / self.images_dirname
             )
             assert self.image_dirs[scene].exists(), self.image_dirs[scene]
 
@@ -220,7 +222,7 @@ class YYCDataModule(pl.LightningDataModule):
                 "val": [n for n in names if n[0] in scenes_val],
             }
         elif isinstance(split_arg, str):
-            with (self.root / split_arg).open("r") as fp:
+            with (self.data_dir / split_arg).open("r") as fp:
                 splits = json.load(fp)
                 
             print(f"Loaded splits from {split_arg}: {list(splits.keys())}")

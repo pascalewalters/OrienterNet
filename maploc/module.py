@@ -41,8 +41,10 @@ class GenericModule(pl.LightningModule):
         losses = self.model.loss(pred, batch)
         self.log_dict(
             {f"loss/{k}/train": v.mean() for k, v in losses.items()},
-            prog_bar=True,
+            prog_bar=False,
             rank_zero_only=True,
+            on_step=False,
+            on_epoch=True
         )
         return losses["total"].mean()
 
@@ -56,9 +58,15 @@ class GenericModule(pl.LightningModule):
                 postfix="/val",
             )
         self.metrics_val(pred, batch)
-        self.log_dict(self.metrics_val, sync_dist=True)
+        self.log_dict(self.metrics_val, 
+                      sync_dist=True,
+                      on_step=False,
+                      on_epoch=True)
         self.losses_val.update(losses)
-        self.log_dict(self.losses_val, sync_dist=True)
+        self.log_dict(self.losses_val, 
+                      sync_dist=True,
+                      on_step=False,
+                      on_epoch=True)
 
     def validation_epoch_start(self, batch):
         self.losses_val = None

@@ -15,7 +15,7 @@ scenes:
 split: image_splits.json
 loading:
   train:
-    batch_size: 1 # was 12 but OOM
+    batch_size: 4 # was 12 but OOM
     num_workers: ${.batch_size}
   val:
     batch_size: ${..train.batch_size}
@@ -29,7 +29,7 @@ crop_size_meters: 64
 max_init_error: 48
 add_map_mask: true
 # preprocessing
-resize_image: 128 # 512
+resize_image: 512
 pad_to_square: true
 rectify_pitch: true
 augmentation:
