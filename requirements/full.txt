@@ -14,8 +14,9 @@ torchmetrics
 jupyter
 lxml
 rtree
-git+https://github.com/mapillary/OpenSfM
+# git+https://github.com/mapillary/OpenSfM
 httpx
 aiolimiter
 scikit-learn
 urllib3>=2
+tensorboard
