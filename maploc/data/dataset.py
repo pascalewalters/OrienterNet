@@ -187,15 +187,15 @@ class MapLocDataset(torchdata.Dataset):
 
         return {
             **data,
-            "image": image.cpu(),
-            "valid": valid.cpu(),
-            "camera": cam.cpu(),
+            "image": image,
+            "valid": valid,
+            "camera": cam,
             "canvas": canvas,
-            "map": torch.from_numpy(np.ascontiguousarray(raster)).long().cpu(),
-            "uv": torch.from_numpy(uv_gt).float().cpu(),
-            "uv_init": torch.from_numpy(uv_init).float().cpu(),
-            "roll_pitch_yaw": torch.tensor((roll, pitch, yaw)).float().cpu(),
-            "pixels_per_meter": torch.tensor(canvas.ppm).float().cpu(),
+            "map": torch.from_numpy(np.ascontiguousarray(raster)).long(),
+            "uv": torch.from_numpy(uv_gt).float(),
+            "uv_init": torch.from_numpy(uv_init).float(),
+            "roll_pitch_yaw": torch.tensor((roll, pitch, yaw)).float(),
+            "pixels_per_meter": torch.tensor(canvas.ppm).float(),
         }
 
     def process_image(self, image, seed):

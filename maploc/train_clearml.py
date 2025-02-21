@@ -11,9 +11,14 @@ from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.utilities import rank_zero_only
 
 from . import EXPERIMENTS_PATH, logger, pl_logger
-from .data import modules as data_modules
-from .module import GenericModule
+# from .data import modules as data_modules
+# from .module import GenericModule
 from clearml import Task, Dataset
+import random
+import numpy as np
+from .module import ONGenericModule
+from .data.yyc.dataset import YYCDataset, create_dataloader
+from torch.utils.tensorboard import SummaryWriter
 
 
 class ClearMLCallback(pl.callbacks.Callback):
@@ -122,113 +127,134 @@ def prepare_experiment_dir(experiment_dir, cfg, rank):
             OmegaConf.save(cfg, fp)
     return last_checkpoint_path
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    
+def save_checkpoint(model, optimizer, epoch, path, is_best=False):
+    checkpoint = {
+        'epoch': epoch,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+    }
+    torch.save(checkpoint, path)
+    if is_best:
+        best_path = osp.join(osp.dirname(path), 'best.pt')
+        torch.save(checkpoint, best_path)
 
-def train(cfg: DictConfig, job_id: Optional[int] = None):
-    task = Task.init(project_name="OrienterNet", 
-                    task_name=cfg.experiment.name,
-                    output_uri=True)
-    
-    task.force_requirements_env_freeze(force=True, requirements_file=None)
-    
-    task.connect(cfg)
-    
-    # Check if clearml dataset_id exists in the config
-    if cfg.clearml.dataset_id:
-        dataset = Dataset.get(dataset_id=cfg.clearml.dataset_id)
-        local_data_path = dataset.get_local_copy()
-        # Update the data_dir path in the nested config
-        cfg.data.paths.data_dir = str(local_data_path)
-        cfg.data.paths.combined_geojson_path = str(local_data_path) + "/combined-output.geojson"
+def train(config: DictConfig, job_id: Optional[int] = None):
     
     torch.set_float32_matmul_precision("medium")
-    OmegaConf.resolve(cfg)
-    rank = rank_zero_only.rank
-
-    if rank == 0:
-        logger.info("Starting training with config:\n%s", OmegaConf.to_yaml(cfg))
-    if cfg.experiment.gpus in (None, 0):
+    OmegaConf.resolve(config)
+    set_seed(config.experiment.seed)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() and config.experiment.gpus > 0 else "cpu")
+    if device.type == "cpu":
         logger.warning("Will train on CPU...")
-        cfg.experiment.gpus = 0
-    elif not torch.cuda.is_available():
-        raise ValueError("Requested GPU but no NVIDIA drivers found.")
-    pl.seed_everything(cfg.experiment.seed, workers=True)
-
-    init_checkpoint_path = cfg.training.get("finetune_from_checkpoint")
-    if init_checkpoint_path is not None:
-        logger.info("Initializing the model from checkpoint %s.", init_checkpoint_path)
-        model = GenericModule.load_from_checkpoint(
-            Path(init_checkpoint_path), strict=True, find_best=False, cfg=cfg
-        )
-    else:
-        model = GenericModule(cfg)
-    if rank == 0:
-        logger.info("Network:\n%s", model.model)
-
-    experiment_dir = osp.join(EXPERIMENTS_PATH, cfg.experiment.name)
-    last_checkpoint_path = prepare_experiment_dir(experiment_dir, cfg, rank)
-    checkpointing_epoch = pl.callbacks.ModelCheckpoint(
-        dirpath=experiment_dir,
-        filename="checkpoint-{epoch:02d}",
-        save_last=True,
-        every_n_epochs=1,
-        save_on_train_epoch_end=True,
-        verbose=True,
-        **cfg.training.checkpointing,
-    )
-    checkpointing_step = pl.callbacks.ModelCheckpoint(
-        dirpath=experiment_dir,
-        filename="checkpoint-{step}",
-        save_last=True,
-        every_n_train_steps=20000,
-        verbose=True,
-        **cfg.training.checkpointing,
-    )
-    checkpointing_step.CHECKPOINT_NAME_LAST = "last-step"
-
-    strategy = "auto"
-    if cfg.experiment.gpus > 1:
-        strategy = pl.strategies.DDPStrategy(find_unused_parameters=False)
-        for split in ["train", "val"]:
-            cfg.data["loading"][split].batch_size = (
-                cfg.data["loading"][split].batch_size // cfg.experiment.gpus
+        
+    model = ONGenericModule(config).to(device)
+    logger.info("Network:\n%s", model.model)
+    
+    # setup directories
+    experiment_dir = osp.join(EXPERIMENTS_PATH, config.experiment.name)
+    Path(experiment_dir).mkdir(parents=True, exist_ok=True)
+    
+    optimizer = model.configure_optimizers()
+    scheduler = None
+    if isinstance(optimizer, tuple):
+        optimizer, schedule = optimizer
+        
+    # init dataloaders
+    if config.clearml.dataset_id:
+    # ClearML init
+        task = Task.init(project_name="OrienterNet",
+                        task_name=config.experiment.name,
+                        output_uri=True)
+        task.force_requirements_env_freeze(force=True, requirements_file=None)
+        task.connect(config)
+        
+        dataset = Dataset.get(dataset_id=config.clearml.dataset_id)
+        local_data_path = dataset.get_local_copy()
+        # Update the data_dir path in the nested config
+        config.data.paths.data_dir = str(local_data_path)
+        config.data.paths.combined_geojson_path = str(local_data_path) + "/combined-output.geojson"
+        
+    # Create datasets using stages
+    train_dataset = YYCDataset(config, stage='train')
+    val_dataset = YYCDataset(config, stage='val')
+    
+    # Create subsets while preserving the cfg attribute
+    train_subset = torch.utils.data.Subset(train_dataset, range(10))
+    val_subset = torch.utils.data.Subset(val_dataset, range(min(5, len(val_dataset))))
+    
+    # Manually add the cfg attribute to the subsets
+    train_subset.cfg = train_dataset.cfg
+    val_subset.cfg = val_dataset.cfg
+    
+    print(f"Training dataset size: {len(train_subset)}")
+    print(f"Validation dataset size: {len(val_subset)}")
+    
+    train_loader = create_dataloader(train_subset, config, 'train')
+    val_loader = create_dataloader(val_subset, config, 'val')
+    
+    print(experiment_dir)
+    
+    writer = SummaryWriter(osp.join(experiment_dir, 'tensorboard'))
+    
+    
+    # Training loop
+    best_val_loss = float('inf')
+    
+    for epoch in range(config.train.training.trainer.max_epochs):
+        model.reset_train_losses()
+        # train epoch
+        for batch_idx, batch in enumerate(train_loader):
+            batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+            
+            optimizer.zero_grad()
+            loss = model.training_step(batch)
+            loss.backward()
+            optimizer.step()
+            
+        train_metrics = model.get_epoch_train_metrics()
+            
+        # Validation loop
+        model.eval()
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                model.validation_step(batch)
+                
+        val_metrics = model.get_validation_metrics()
+    
+    
+        for name, value in {**train_metrics, **val_metrics}.items():
+            writer.add_scalar(name, value, epoch)
+            if config.clearml.dataset_id:
+                task.get_logger().report_scalar(
+                    title=name,
+                    series="Metrics",
+                    value=value,
+                    iteration=epoch
+                )
+            
+            save_checkpoint(
+                model, optimizer, epoch,
+                osp.join(experiment_dir, f'checkpoint-epoch-{epoch:02d}.pt')
             )
-            cfg.data["loading"][split].num_workers = int(
-                (cfg.data["loading"][split].num_workers + cfg.experiment.gpus - 1)
-                / cfg.experiment.gpus
-            )
-    data = data_modules[cfg.data.get("name", "yyc")](cfg.data)
-
-    tb_args = {"name": cfg.experiment.name, "version": ""}
-    tb = pl.loggers.TensorBoardLogger(EXPERIMENTS_PATH, **tb_args)
-
-    callbacks = [
-        checkpointing_epoch,
-        checkpointing_step,
-        pl.callbacks.LearningRateMonitor(),
-        SeedingCallback(),
-        # CleanProgressBar(),
-        ConsoleLogger(),
-        ClearMLCallback(),
-    ]
-    if cfg.experiment.gpus > 0:
-        callbacks.append(pl.callbacks.DeviceStatsMonitor())
-
-    trainer = pl.Trainer(
-        default_root_dir=experiment_dir,
-        detect_anomaly=False,
-        enable_model_summary=False,
-        sync_batchnorm=True,
-        enable_checkpointing=True,
-        enable_progress_bar=False,
-        logger=tb,
-        callbacks=callbacks,
-        strategy=strategy,
-        # check_val_every_n_epoch=1,
-        accelerator="gpu",
-        num_nodes=1,
-        **cfg.training.trainer,
-    )
-    trainer.fit(model, data, ckpt_path=last_checkpoint_path)
+            
+            val_loss = val_metrics.get('loss/total/val', float('inf'))
+            # TODO: implement saving best model? 
+        
+            # Step scheduler if it exists
+            if scheduler is not None:
+                scheduler.step()
+            
+        logger.info(f'Epoch {epoch}: train_loss={train_metrics["loss/total/train"]:.4f}, '
+                f'val_loss={val_loss:.4f}')    
+    
 
 
 @hydra.main(

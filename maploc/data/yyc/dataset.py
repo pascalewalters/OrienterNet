@@ -9,67 +9,83 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
-import pytorch_lightning as pl
 import torch
-import torch.utils.data as torchdata
 from omegaconf import DictConfig, OmegaConf
 
 from ... import DATASETS_PATH, logger
 from ...osm.tiling import TileManager
 from ..dataset import MapLocDataset
 from ..torch import collate, worker_init_fn
+from torch.utils.data import Dataset, DataLoader
 
-
-class YYCDataModule(pl.LightningDataModule):
+class YYCDataset(Dataset):
     # dump_filename = "dump.json"
     images_archive = "images.tar.gz"
     images_dirname = "images/"
 
     default_cfg = {
-        **MapLocDataset.default_cfg,
-        "name": "yyc",
-        # paths and fetch
-        "paths": {
-            "data_dir": None,
-            "osm_dir": None,
-            "combined_geojson_path": None,
-            "photos_dir": None,
-            "mvf_dir": None,
-        },
-        "local_dir": None,
-        "tiles_filename": "tiles.pkl",
-        "scenes": "???",
-        "split": None,
-        "loading": {
-            "train": "???",
-            "val": "${.test}",
-            "test": {"batch_size": 1, "num_workers": 0},
-        },
-        "filter_for": None,
-        "filter_by_ground_angle": None,
-        "min_num_points": "???",
-    }
-
-    def __init__(self, cfg: Dict[str, Any]):
+        "data":{
+            **MapLocDataset.default_cfg,
+            "name": "yyc",
+            # paths and fetch
+            "paths": {
+                "data_dir": None,
+                "osm_dir": None,
+                "combined_geojson_path": None,
+                "photos_dir": None,
+                "mvf_dir": None,
+            },
+            "local_dir": None,
+            "tiles_filename": "tiles.pkl",
+            "scenes": "???",
+            "split": None,
+            "loading": {
+                "train": "???",
+                "val": "${.test}",
+                "test": {"batch_size": 1, "num_workers": 0},
+            },
+            "filter_for": None,
+            "filter_by_ground_angle": None,
+            "min_num_points": "???",
+        }
+    }    
+    
+    def __init__(self, cfg: Dict[str, Any], stage: str):
         super().__init__()
+        # this cfg is orienternet.yaml 
         default_cfg = OmegaConf.create(self.default_cfg)
-        OmegaConf.set_struct(default_cfg, True)  # cannot add new keys
+        OmegaConf.set_struct(default_cfg, False)  # CANNOT add new keys
         self.cfg = OmegaConf.merge(default_cfg, cfg)
+        self.stage = stage
             
-        self.local_dir = self.cfg.local_dir or os.environ.get("TMPDIR")
-        
-        self.data_dir = Path(self.cfg.paths.data_dir)
+        self.local_dir = self.cfg.data.local_dir or os.environ.get("TMPDIR")
+        self.data_dir = Path(self.cfg.data.paths.data_dir)
             
         if self.local_dir is not None:
             self.local_dir = Path(self.local_dir, "YYC")
-        if self.cfg.crop_size_meters < self.cfg.max_init_error:
+        if self.cfg.data.crop_size_meters < self.cfg.data.max_init_error:
             raise ValueError("The ground truth location can be outside the map.")
+        
+        self.prepare_data()
+        self.setup()
+        
+        # Create the actual dataset using MapLocDataset
+        self.dataset = MapLocDataset(
+            self.stage,  # Use stage instead of split
+            self.cfg.data,
+            self.splits[self.stage],  # Use stage
+            self.data[self.stage],    # Use stage
+            self.image_dirs,
+            self.tile_managers,
+            image_ext=".jpg"
+        )
 
+        
     def prepare_data(self):
-        for scene in self.cfg.scenes:
+        for scene in self.cfg.data.scenes:
             dump_dir = self.data_dir / scene
             # assert (dump_dir / self.dump_filename).exists(), dump_dir
-            assert (dump_dir / self.cfg.tiles_filename).exists(), dump_dir
+            assert (dump_dir / self.cfg.data.tiles_filename).exists(), dump_dir
             if self.local_dir is None:
                 assert (dump_dir / self.images_dirname).exists(), dump_dir
                 continue
@@ -81,21 +97,21 @@ class YYCDataModule(pl.LightningDataModule):
             images_archive = dump_dir / self.images_archive
             logger.info("Extracting the image archive %s.", images_archive)
             with tarfile.open(images_archive) as fp:
-                fp.extractall(local_dir)
-
-    def setup(self, stage: Optional[str] = None):
+                fp.extractall(local_dir)        
+        
+    def setup(self):
         self.dumps = {}
         self.tile_managers = {}
         self.image_dirs = {}
         names = []
         
         
-        combined_geojson_path = Path(self.cfg.paths.combined_geojson_path)
+        combined_geojson_path = Path(self.cfg.data.paths.combined_geojson_path)
         with open(combined_geojson_path, 'r') as f:
             geojson_data = json.load(f)
             
         
-        for scene in self.cfg.scenes:
+        for scene in self.cfg.data.scenes:
             logger.info("Loading scene %s.", scene)
             dump_dir = self.data_dir / scene
             
@@ -113,29 +129,29 @@ class YYCDataModule(pl.LightningDataModule):
                     
             
             
-            logger.info("Loading map tiles %s.", self.cfg.tiles_filename)
+            logger.info("Loading map tiles %s.", self.cfg.data.tiles_filename)
             self.tile_managers[scene] = TileManager.load(
-                dump_dir / self.cfg.tiles_filename
+                dump_dir / self.cfg.data.tiles_filename
             )
             groups = self.tile_managers[scene].groups
             
             # TODO: ensure num_classes set to only wall for current dataset
-            if self.cfg.num_classes:  # check consistency
-                if set(groups.keys()) != set(self.cfg.num_classes.keys()):
+            if self.cfg.data.num_classes:  # check consistency
+                if set(groups.keys()) != set(self.cfg.data.num_classes.keys()):
                     raise ValueError(
                         "Inconsistent groups: "
-                        f"{groups.keys()} {self.cfg.num_classes.keys()}"
+                        f"{groups.keys()} {self.cfg.data.num_classes.keys()}"
                     )
                 for k in groups:
-                    if len(groups[k]) != self.cfg.num_classes[k]:
+                    if len(groups[k]) != self.cfg.data.num_classes[k]:
                         raise ValueError(
-                            f"{k}: {len(groups[k])} vs {self.cfg.num_classes[k]}"
+                            f"{k}: {len(groups[k])} vs {self.cfg.data.num_classes[k]}"
                         )
             ppm = self.tile_managers[scene].ppm
-            if ppm != self.cfg.pixel_per_meter:
+            if ppm != self.cfg.data.pixel_per_meter:
                 raise ValueError(
                     "The tile manager and the config/model have different ground "
-                    f"resolutions: {ppm} vs {self.cfg.pixel_per_meter}"
+                    f"resolutions: {ppm} vs {self.cfg.data.pixel_per_meter}"
                 )
             
             
@@ -147,21 +163,61 @@ class YYCDataModule(pl.LightningDataModule):
 
         print(f"Total number of images found: {len(names)}")
 
-        self.parse_splits(self.cfg.split, names)
+        self.splits = self.parse_splits(self.cfg.data.split, names)
         # if self.cfg.filter_for is not None:
         #     self.filter_elements()
-        self.pack_data()
+        self.data = self.pack_data()
+        
+    def parse_splits(self, split_arg, names):
+        """Parse dataset splits based on configuration"""
+        if split_arg is None:
+            return {
+                "train": names,
+                "val": names,
+            }
+        elif isinstance(split_arg, int):
+            names = np.random.RandomState(self.cfg.seed).permutation(names).tolist()
+            return {
+                "train": names[split_arg:],
+                "val": names[:split_arg],
+            }
+        elif isinstance(split_arg, DictConfig):
+            scenes_val = set(split_arg.val)
+            scenes_train = set(split_arg.train)
+            assert len(scenes_val - set(self.cfg.data.scenes)) == 0
+            assert len(scenes_train - set(self.cfg.data.scenes)) == 0
+            return {
+                "train": [n for n in names if n[0] in scenes_train],
+                "val": [n for n in names if n[0] in scenes_val],
+            }
+        elif isinstance(split_arg, str):
+            with (self.data_dir / split_arg).open("r") as fp:
+                splits = json.load(fp)
+            
+            splits = {
+                k: {f"f_{loc}": set(ids) for loc, ids in split.items()}
+                for k, split in splits.items()
+            }
+            
+            result = {}
+            for k, split in splits.items():
+                matching_names = []
+                for n in names:
+                    scene_id, image_id = n
+                    image_id = image_id.replace('.jpg', '')
+                    if scene_id in split and image_id in split[scene_id]:
+                        matching_names.append(n)
+                result[k] = matching_names
+            return result
+        else:
+            raise ValueError(f"Invalid split argument: {split_arg}")
+
 
     def pack_data(self):
-        # We pack the data into compact tensors
-        # that can be shared across processes without copy.
-        stage_data = {}  # Create a temporary dictionary
-        
-        # print(f"SPLITS ITEMS: {self.splits.items()}")
+        """Pack data into tensors for efficient loading"""
+        stage_data = {}
         
         for stage, names in self.splits.items():
-            print(f"Processing stage: {stage} with {len(names)} samples")
-            
             stage_data[stage] = {
                 'latitude': [],
                 'longitude': [],
@@ -177,116 +233,24 @@ class YYCDataModule(pl.LightningDataModule):
             # Convert to tensors
             for k in stage_data[stage]:
                 stage_data[stage][k] = torch.tensor(stage_data[stage][k])
-
-            print(f"Packed {stage} data with {len(stage_data[stage]['latitude'])} samples")
-
-
-        save_path = "stage_data_structure.txt"
-        with open(save_path, 'w') as f:
-            f.write("Stage Data Structure:\n\n")
-            for stage in stage_data:
-                f.write(f"\nStage: {stage}\n")
-                f.write("-" * 50 + "\n")
-                for key, value in stage_data[stage].items():
-                    f.write(f"{key}:\n")
-                    f.write(f"  Type: {type(value)}\n")
-                    f.write(f"  Shape: {value.shape}\n")
-                    f.write(f"  First few values: {value[:5]}\n\n")
-
-        self.data = stage_data
         
-        print(f"Final data structure keys: {self.data.keys()}")
-        for stage in self.data:
-            print(f"Data for {stage}: {self.data[stage].keys()}")
+        return stage_data        
 
+    def __len__(self):
+        return len(self.dataset)
 
-    def parse_splits(self, split_arg, names):
-        if split_arg is None:
-            self.splits = {
-                "train": names,
-                "val": names,
-            }
-        elif isinstance(split_arg, int):
-            names = np.random.RandomState(self.cfg.seed).permutation(names).tolist()
-            self.splits = {
-                "train": names[split_arg:],
-                "val": names[:split_arg],
-            }
-        elif isinstance(split_arg, DictConfig):
-            scenes_val = set(split_arg.val)
-            scenes_train = set(split_arg.train)
-            assert len(scenes_val - set(self.cfg.scenes)) == 0
-            assert len(scenes_train - set(self.cfg.scenes)) == 0
-            self.splits = {
-                "train": [n for n in names if n[0] in scenes_train],
-                "val": [n for n in names if n[0] in scenes_val],
-            }
-        elif isinstance(split_arg, str):
-            with (self.data_dir / split_arg).open("r") as fp:
-                splits = json.load(fp)
-                
-            print(f"Loaded splits from {split_arg}: {list(splits.keys())}")
-                
-            splits = {
-                k: {f"f_{loc}": set(ids) for loc, ids in split.items()}
-                for k, split in splits.items()
-            }
-            
-            # print(f"Transformed splits structure: {splits}")
-            
-            self.splits = {}
-            for k, split in splits.items():
-                matching_names = []
-                for n in names:
-                    scene_id, image_id = n
-                    
-                    image_id = image_id.replace('.jpg', '')
-                    
-                    if scene_id in split and image_id in split[scene_id]:
-                        matching_names.append(n)
-                self.splits[k] = matching_names
-        else:
-            raise ValueError(split_arg)
-
-    def dataset(self, stage: str):
-        return MapLocDataset(
-            stage,
-            self.cfg,
-            self.splits[stage],
-            self.data[stage],
-            self.image_dirs,
-            self.tile_managers,
-            image_ext=".jpg",
-        )
-
-    def dataloader(
-        self,
-        stage: str,
-        shuffle: bool = False,
-        num_workers: int = None,
-        sampler: Optional[torchdata.Sampler] = None,
-    ):
-        dataset = self.dataset(stage)
-        cfg = self.cfg["loading"][stage]
-        num_workers = cfg["num_workers"] if num_workers is None else num_workers
-        loader = torchdata.DataLoader(
-            dataset,
-            batch_size=cfg["batch_size"],
-            num_workers=num_workers,
-            shuffle=shuffle or (stage == "train"),
-            pin_memory=True,
-            persistent_workers=num_workers > 0,
-            worker_init_fn=worker_init_fn,
-            collate_fn=collate,
-            sampler=sampler,
-        )
-        return loader
-
-    def train_dataloader(self, **kwargs):
-        return self.dataloader("train", **kwargs)
-
-    def val_dataloader(self, **kwargs):
-        return self.dataloader("val", **kwargs)
-
-    def test_dataloader(self, **kwargs):
-        return self.dataloader("test", **kwargs)
+    def __getitem__(self, idx):
+        return self.dataset[idx]
+    
+def create_dataloader(dataset, cfg, split):
+    """Helper function to create dataloaders"""
+    return DataLoader(
+        dataset,
+        batch_size=cfg.data.loading[split].batch_size,
+        num_workers=cfg.data.loading[split].num_workers,
+        shuffle=(split == 'train'),
+        pin_memory=True,
+        persistent_workers=cfg.data.loading[split].num_workers > 0,
+        worker_init_fn=worker_init_fn,
+        collate_fn=collate,
+    )

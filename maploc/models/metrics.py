@@ -48,6 +48,8 @@ class MeanMetricWithRecall(torchmetrics.Metric):
         self.add_state("value", default=[], dist_reduce_fx="cat")
 
     def compute(self):
+        if not self.value:  # Check if list is empty
+            return torch.tensor(0.0, device=self.device)  # Return default value
         return dim_zero_cat(self.value).mean(0)
 
     def get_errors(self):
