@@ -17,13 +17,14 @@ from ..data.torch import collate, unbatch_to_device
 from ..models.metrics import AngleError, LateralLongitudinalError, Location2DError
 from ..models.sequential import GPSAligner, RigidAligner
 from ..models.voting import argmax_xyr, fuse_gps
-from ..module import GenericModule
+from ..module import ONGenericModule
 from ..utils.io import DATA_URL, download_file
 from .utils import write_dump
 from .viz import plot_example_sequential, plot_example_single
 
 pretrained_models = dict(
     OrienterNet_MGL=("orienternet_mgl.ckpt", dict(num_rotations=256)),
+    YYC_Baseline=("checkpoint-epoch-200.pt", dict(num_rotations=256))
 )
 
 
@@ -51,7 +52,7 @@ def resolve_checkpoint_path(experiment_or_path: str) -> Path:
 @torch.no_grad()
 def evaluate_single_image(
     dataloader: torch.utils.data.DataLoader,
-    model: GenericModule,
+    model: ONGenericModule,
     num: Optional[int] = None,
     callback: Optional[Callable] = None,
     progress: bool = True,
@@ -101,7 +102,7 @@ def evaluate_single_image(
 def evaluate_sequential(
     dataset: torch.utils.data.Dataset,
     chunk2idx: Dict,
-    model: GenericModule,
+    model: ONGenericModule,
     num: Optional[int] = None,
     shuffle: bool = False,
     callback: Optional[Callable] = None,
@@ -213,7 +214,7 @@ def evaluate(
 
     logger.info("Evaluating model %s with config %s", experiment, cfg)
     checkpoint_path = resolve_checkpoint_path(experiment)
-    model = GenericModule.load_from_checkpoint(
+    model = ONGenericModule.load_from_checkpoint(
         checkpoint_path, cfg=cfg, find_best=not experiment.endswith(".ckpt")
     )
     model = model.eval()

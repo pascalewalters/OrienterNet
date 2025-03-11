@@ -44,9 +44,14 @@ class ONGenericModule(nn.Module):
         for name, metric in self.model.metrics().items():
             self.metrics_val[name] = metric.to(self.device)  # Move metric to device
             
+        # Add test metrics
+        self.metrics_test = {}
+        for name, metric in self.model.metrics().items():
+            self.metrics_test[name] = metric.to(self.device)  # Move metric to device
             
         self.train_losses = {}
         self.val_losses = None
+        self.test_losses = None
         self.to(self.device)
         
     def forward(self, batch):
@@ -130,7 +135,46 @@ class ONGenericModule(nn.Module):
             return optimizer, scheduler
         return optimizer       
             
+    def test_step(self, batch):
+        """Perform a test step on a batch of data"""
+        self.eval()
+        with torch.no_grad():
+            pred = self(batch)
+            losses = self.model.loss(pred, batch)
+            
+            # Initialize loss meters if not exists
+            if self.test_losses is None:
+                self.test_losses = {
+                    k: AverageKeyMeter(k).to(self.device) for k in losses
+                }
+            
+            # Update metrics
+            for metric in self.metrics_test.values():
+                metric(pred, batch)
+            
+            # Update losses
+            for meter in self.test_losses.values():
+                meter.update(losses)
+            
+            return losses["total"].mean()
     
+    def get_test_metrics(self):
+        """Get test metrics and losses"""
+        metrics_dict = {}
+        
+        # Get metric values
+        for name, metric in self.metrics_test.items():
+            metrics_dict[f"test/{name}"] = metric.compute()
+            metric.reset()
+        
+        # Get loss values
+        if self.test_losses is not None:
+            for name, meter in self.test_losses.items():
+                metrics_dict[f"loss/{name}/test"] = meter.compute()
+                meter.reset()
+            
+        self.test_losses = None
+        return metrics_dict
 
 # class GenericModule(pl.LightningModule):
 #     def __init__(self, cfg):

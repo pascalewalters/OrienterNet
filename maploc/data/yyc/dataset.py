@@ -174,21 +174,29 @@ class YYCDataset(Dataset):
             return {
                 "train": names,
                 "val": names,
+                "test": names,  # Add test set
             }
         elif isinstance(split_arg, int):
             names = np.random.RandomState(self.cfg.seed).permutation(names).tolist()
+            # Split into train/val/test with 80/10/10 ratio by default
+            test_size = split_arg
+            val_size = split_arg
             return {
-                "train": names[split_arg:],
-                "val": names[:split_arg],
+                "train": names[val_size + test_size:],
+                "val": names[:val_size],
+                "test": names[val_size:val_size + test_size],
             }
         elif isinstance(split_arg, DictConfig):
             scenes_val = set(split_arg.val)
             scenes_train = set(split_arg.train)
+            scenes_test = set(split_arg.get('test', []))  # Add test scenes
             assert len(scenes_val - set(self.cfg.data.scenes)) == 0
             assert len(scenes_train - set(self.cfg.data.scenes)) == 0
+            assert len(scenes_test - set(self.cfg.data.scenes)) == 0
             return {
                 "train": [n for n in names if n[0] in scenes_train],
                 "val": [n for n in names if n[0] in scenes_val],
+                "test": [n for n in names if n[0] in scenes_test],
             }
         elif isinstance(split_arg, str):
             with (self.data_dir / split_arg).open("r") as fp:
@@ -208,6 +216,11 @@ class YYCDataset(Dataset):
                     if scene_id in split and image_id in split[scene_id]:
                         matching_names.append(n)
                 result[k] = matching_names
+            
+            # Ensure test set exists, default to empty if not specified
+            if 'test' not in result:
+                result['test'] = []
+            
             return result
         else:
             raise ValueError(f"Invalid split argument: {split_arg}")

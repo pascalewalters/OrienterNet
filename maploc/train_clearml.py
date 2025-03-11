@@ -19,6 +19,7 @@ import numpy as np
 from .module import ONGenericModule
 from .data.yyc.dataset import YYCDataset, create_dataloader
 from torch.utils.tensorboard import SummaryWriter
+import json
 
 
 class ClearMLCallback(pl.callbacks.Callback):
@@ -171,7 +172,8 @@ def train(config: DictConfig, job_id: Optional[int] = None):
     # ClearML init
         task = Task.init(project_name="OrienterNet",
                         task_name=config.experiment.name,
-                        output_uri=True)
+                        output_uri=True,
+                        _allow_omegaconf_edit=True)
         task.force_requirements_env_freeze(force=True, requirements_file=None)
         task.connect(config)
         
@@ -179,25 +181,22 @@ def train(config: DictConfig, job_id: Optional[int] = None):
         local_data_path = dataset.get_local_copy()
         # Update the data_dir path in the nested config
         config.data.paths.data_dir = str(local_data_path)
-        config.data.paths.combined_geojson_path = str(local_data_path) + "/combined-output.geojson"
+        config.data.paths.combined_geojson_path = str(local_data_path) + "/combined-output.geojson" # TODO: CHANGE FROM e57 when training normal
         
     # Create datasets using stages
     train_dataset = YYCDataset(config, stage='train')
     val_dataset = YYCDataset(config, stage='val')
+    test_dataset = YYCDataset(config, stage='test')
     
-    # Create subsets while preserving the cfg attribute
-    train_subset = torch.utils.data.Subset(train_dataset, range(10))
-    val_subset = torch.utils.data.Subset(val_dataset, range(min(5, len(val_dataset))))
+
     
-    # Manually add the cfg attribute to the subsets
-    train_subset.cfg = train_dataset.cfg
-    val_subset.cfg = val_dataset.cfg
+    print(f"Training dataset size: {len(train_dataset)}")
+    print(f"Validation dataset size: {len(val_dataset)}")
+    print(f"Test dataset size: {len(test_dataset)}")
     
-    print(f"Training dataset size: {len(train_subset)}")
-    print(f"Validation dataset size: {len(val_subset)}")
-    
-    train_loader = create_dataloader(train_subset, config, 'train')
-    val_loader = create_dataloader(val_subset, config, 'val')
+    train_loader = create_dataloader(train_dataset, config, 'train')
+    val_loader = create_dataloader(val_dataset, config, 'val')
+    test_loader = create_dataloader(test_dataset, config, 'test')
     
     print(experiment_dir)
     
@@ -228,9 +227,20 @@ def train(config: DictConfig, job_id: Optional[int] = None):
                 model.validation_step(batch)
                 
         val_metrics = model.get_validation_metrics()
+        
+        # Test loop (run periodically, e.g., every 5 epochs)
+        test_metrics = {}
+        if epoch % 5 == 0 or epoch == config.train.training.trainer.max_epochs - 1:
+            model.eval()
+            with torch.no_grad():
+                for batch in test_loader:
+                    batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                    model.test_step(batch)
+                    
+            test_metrics = model.get_test_metrics()
+            logger.info(f'Test metrics at epoch {epoch}: {test_metrics}')
     
-    
-        for name, value in {**train_metrics, **val_metrics}.items():
+        for name, value in {**train_metrics, **val_metrics, **test_metrics}.items():
             writer.add_scalar(name, value, epoch)
             if config.clearml.dataset_id:
                 task.get_logger().report_scalar(
@@ -240,21 +250,52 @@ def train(config: DictConfig, job_id: Optional[int] = None):
                     iteration=epoch
                 )
             
+        # if epoch % config.train.training.trainer.save_epoch == 0:    
+        #     save_checkpoint(
+        #         model, optimizer, epoch,
+        #         osp.join(experiment_dir, f'checkpoint-epoch-{epoch:02d}.pt')
+        #     )
+            
+        val_loss = val_metrics.get('loss/total/val', float('inf'))
+
+
+        if val_loss < best_val_loss:
             save_checkpoint(
                 model, optimizer, epoch,
-                osp.join(experiment_dir, f'checkpoint-epoch-{epoch:02d}.pt')
+                osp.join(experiment_dir, f"best-model-epoch-{epoch:02d}.pt")
             )
-            
-            val_loss = val_metrics.get('loss/total/val', float('inf'))
-            # TODO: implement saving best model? 
-        
-            # Step scheduler if it exists
-            if scheduler is not None:
-                scheduler.step()
+            best_val_loss = val_loss
+    
+        # Step scheduler if it exists
+        if scheduler is not None:
+            scheduler.step()
             
         logger.info(f'Epoch {epoch}: train_loss={train_metrics["loss/total/train"]:.4f}, '
-                f'val_loss={val_loss:.4f}')    
+                f'val_loss={val_loss:.4f}')
     
+    # Final evaluation on test set
+    model.eval()
+    with torch.no_grad():
+        for batch in test_loader:
+            batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
+            model.test_step(batch)
+            
+    final_test_metrics = model.get_test_metrics()
+    logger.info(f'Final test metrics: {final_test_metrics}')
+    
+    # Save final test metrics
+    with open(osp.join(experiment_dir, 'test_metrics.json'), 'w') as f:
+        json.dump(final_test_metrics, f, indent=2)
+        
+    # Report to ClearML if enabled
+    if config.clearml.dataset_id:
+        for name, value in final_test_metrics.items():
+            task.get_logger().report_scalar(
+                title=name,
+                series="Final Test",
+                value=value,
+                iteration=0
+            )
 
 
 @hydra.main(

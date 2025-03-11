@@ -112,11 +112,12 @@ class Colormap:
 
     @classmethod
     def apply(cls, rasters):
+        default_color = np.array([0, 0, 0])  # Black color as default
         return (
             np.where(
                 rasters[1, ..., None] > 0,
                 cls.colors_ways[rasters[1]],
-                # cls.colors_areas[rasters[0]],
+                default_color,  # Use a default color in replacement of areas 
             )
             / 255.0
         )
