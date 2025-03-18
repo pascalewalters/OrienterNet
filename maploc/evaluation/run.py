@@ -24,7 +24,7 @@ from .viz import plot_example_sequential, plot_example_single
 
 pretrained_models = dict(
     OrienterNet_MGL=("orienternet_mgl.ckpt", dict(num_rotations=256)),
-    YYC_Baseline=("checkpoint-epoch-200.pt", dict(num_rotations=256))
+    YYC_Baseline=("checkpoint-epoch-200.pt", dict(num_rotations=256)),
 )
 
 

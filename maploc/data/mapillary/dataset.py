@@ -79,37 +79,33 @@ class MapillaryDataModule(pl.LightningDataModule):
         self.tile_managers = {}
         self.image_dirs = {}
         names = []
-        
-        
+
         geojson_path = "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS/combined-output.geojson"
-        with open(geojson_path, 'r') as f:
+        with open(geojson_path, "r") as f:
             geojson_data = json.load(f)
-            
-        
+
         for scene in self.cfg.scenes:
             logger.info("Loading scene %s.", scene)
             dump_dir = self.root / scene
-            
+
             self.dumps[scene] = {}
-            
-            for feature in geojson_data['features']:
+
+            for feature in geojson_data["features"]:
                 if f"f_{feature['properties']['map']}" == scene:
-                    image_id = feature['properties']['imageUrl'].replace('.png', '')
+                    image_id = feature["properties"]["imageUrl"].replace(".png", "")
                     self.dumps[scene][image_id] = {
-                        'latitude': feature['geometry']['coordinates'][1],
-                        'longitude': feature['geometry']['coordinates'][0],
-                        'bearing': float(feature['properties']['bearing'])
+                        "latitude": feature["geometry"]["coordinates"][1],
+                        "longitude": feature["geometry"]["coordinates"][0],
+                        "bearing": float(feature["properties"]["bearing"]),
                     }
                     names.append((scene, image_id))
-                    
-            
-            
+
             logger.info("Loading map tiles %s.", self.cfg.tiles_filename)
             self.tile_managers[scene] = TileManager.load(
                 dump_dir / self.cfg.tiles_filename
             )
             groups = self.tile_managers[scene].groups
-            
+
             # TODO: ensure num_classes set to only wall for current dataset
             if self.cfg.num_classes:  # check consistency
                 if set(groups.keys()) != set(self.cfg.num_classes.keys()):
@@ -128,8 +124,6 @@ class MapillaryDataModule(pl.LightningDataModule):
                     "The tile manager and the config/model have different ground "
                     f"resolutions: {ppm} vs {self.cfg.pixel_per_meter}"
                 )
-            
-            
 
             self.image_dirs[scene] = (
                 (self.local_dir or self.root) / scene / self.images_dirname
@@ -147,33 +141,30 @@ class MapillaryDataModule(pl.LightningDataModule):
         # We pack the data into compact tensors
         # that can be shared across processes without copy.
         stage_data = {}  # Create a temporary dictionary
-        
+
         # print(f"SPLITS ITEMS: {self.splits.items()}")
-        
+
         for stage, names in self.splits.items():
             print(f"Processing stage: {stage} with {len(names)} samples")
-            
-            stage_data[stage] = {
-                'latitude': [],
-                'longitude': [],
-                'bearing': []
-            }
-            
+
+            stage_data[stage] = {"latitude": [], "longitude": [], "bearing": []}
+
             for scene, image_id in names:
                 image_data = self.dumps[scene][image_id]
-                stage_data[stage]['latitude'].append(image_data['latitude'])
-                stage_data[stage]['longitude'].append(image_data['longitude'])
-                stage_data[stage]['bearing'].append(image_data['bearing'])
-                
+                stage_data[stage]["latitude"].append(image_data["latitude"])
+                stage_data[stage]["longitude"].append(image_data["longitude"])
+                stage_data[stage]["bearing"].append(image_data["bearing"])
+
             # Convert to tensors
             for k in stage_data[stage]:
                 stage_data[stage][k] = torch.tensor(stage_data[stage][k])
 
-            print(f"Packed {stage} data with {len(stage_data[stage]['latitude'])} samples")
-
+            print(
+                f"Packed {stage} data with {len(stage_data[stage]['latitude'])} samples"
+            )
 
         save_path = "stage_data_structure.txt"
-        with open(save_path, 'w') as f:
+        with open(save_path, "w") as f:
             f.write("Stage Data Structure:\n\n")
             for stage in stage_data:
                 f.write(f"\nStage: {stage}\n")
@@ -185,11 +176,10 @@ class MapillaryDataModule(pl.LightningDataModule):
                     f.write(f"  First few values: {value[:5]}\n\n")
 
         self.data = stage_data
-        
+
         print(f"Final data structure keys: {self.data.keys()}")
         for stage in self.data:
             print(f"Data for {stage}: {self.data[stage].keys()}")
-
 
     def parse_splits(self, split_arg, names):
         if split_arg is None:
@@ -215,24 +205,24 @@ class MapillaryDataModule(pl.LightningDataModule):
         elif isinstance(split_arg, str):
             with (self.root / split_arg).open("r") as fp:
                 splits = json.load(fp)
-                
+
             print(f"Loaded splits from {split_arg}: {list(splits.keys())}")
-                
+
             splits = {
                 k: {f"f_{loc}": set(ids) for loc, ids in split.items()}
                 for k, split in splits.items()
             }
-            
+
             # print(f"Transformed splits structure: {splits}")
-            
+
             self.splits = {}
             for k, split in splits.items():
                 matching_names = []
                 for n in names:
                     scene_id, image_id = n
-                    
-                    image_id = image_id.replace('.jpg', '')
-                    
+
+                    image_id = image_id.replace(".jpg", "")
+
                     if scene_id in split and image_id in split[scene_id]:
                         matching_names.append(n)
                 self.splits[k] = matching_names

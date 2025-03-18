@@ -118,7 +118,6 @@ class OrienterNet(BaseModel):
         pred_map = pred["map"] = self.map_encoder(data)
         f_map = pred_map["map_features"][0]
 
-
         # Extract image features.
         level = 0
         f_image = self.image_encoder(data)["feature_maps"][level]

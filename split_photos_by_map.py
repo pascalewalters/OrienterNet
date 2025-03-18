@@ -3,6 +3,7 @@ import os
 import shutil
 from pathlib import Path
 
+
 def organize_photos_by_map():
     # Define paths
     base_dir = "/home/kevinmeng/workspace/mappedin/VPS/Mappedin_VPS_Data-20250127T163206Z-001/Mappedin_VPS_Data/YYC_VPS"
@@ -14,17 +15,17 @@ def organize_photos_by_map():
     os.makedirs(output_base_dir, exist_ok=True)
 
     # Read and parse the geojson file
-    with open(geojson_path, 'r') as f:
+    with open(geojson_path, "r") as f:
         data = json.load(f)
 
     # Dictionary to keep track of photos count per map
     map_counts = {}
 
     # Process each feature
-    for feature in data['features']:
-        map_id = feature['properties']['map']
-        image_name = feature['properties']['imageUrl']
-        
+    for feature in data["features"]:
+        map_id = feature["properties"]["map"]
+        image_name = feature["properties"]["imageUrl"]
+
         # Create map directory if it doesn't exist
         map_dir = os.path.join(output_base_dir, map_id)
         os.makedirs(map_dir, exist_ok=True)
@@ -48,6 +49,7 @@ def organize_photos_by_map():
         print(f"Map {map_id}: {count} photos")
     print(f"\nTotal maps: {len(map_counts)}")
     print(f"Total photos organized: {sum(map_counts.values())}")
+
 
 if __name__ == "__main__":
     organize_photos_by_map()

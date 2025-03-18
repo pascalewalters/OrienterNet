@@ -152,9 +152,7 @@ class Patterns:
     # + ways: road, path
     # + node: fountain, bicycle_parking
 
-    ways = dict(
-        wall="obstruction:wall"
-    )
+    ways = dict(wall="obstruction:wall")
     # + nodes: bollard
 
     nodes = dict(

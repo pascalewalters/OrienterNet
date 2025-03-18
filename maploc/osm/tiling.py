@@ -95,10 +95,10 @@ class TileManager:
         tile_size: int = 128,
     ):
         # bbox_osm = projection.unproject(bbox)
-        if path is not None:            # and path.is_file():
+        if path is not None:  # and path.is_file():
             # path = Path(path).resolve()
             if path.is_file():
-                with open(path, 'r') as f:
+                with open(path, "r") as f:
                     osm_dict = json.load(f)
                 osm = OSMData.from_dict(osm_dict)
                 bbox = osm.box
@@ -144,11 +144,20 @@ class TileManager:
     def query(self, bbox: BoundaryBox) -> Canvas:
         bbox = round_bbox(bbox, self.bbox.min_, self.ppm)
         canvas = Canvas(bbox, self.ppm)
-        raster = np.zeros((2, canvas.h, canvas.w), np.uint8) # 
+        raster = np.zeros((2, canvas.h, canvas.w), np.uint8)  #
 
         bbox_all = bbox & self.bbox
-        ij_min = np.floor((bbox_all.min_ - self.origin) / self.tile_size).astype(int).flatten()
-        ij_max = np.ceil((bbox_all.max_ - self.origin) / self.tile_size).astype(int).flatten() - 1
+        ij_min = (
+            np.floor((bbox_all.min_ - self.origin) / self.tile_size)
+            .astype(int)
+            .flatten()
+        )
+        ij_max = (
+            np.ceil((bbox_all.max_ - self.origin) / self.tile_size)
+            .astype(int)
+            .flatten()
+            - 1
+        )
         # print(f"ijmax: {ij_max[0]}////////// ijmin: {ij_max[0]}")
         for i in range(ij_min[0], ij_max[0] + 1):
             for j in range(ij_min[1], ij_max[1] + 1):

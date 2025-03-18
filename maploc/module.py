@@ -12,6 +12,7 @@ from . import logger
 from .models import get_model
 import yaml
 
+
 class AverageKeyMeter(MeanMetric):
     def __init__(self, key, *args, **kwargs):
         self.key = key
@@ -22,159 +23,162 @@ class AverageKeyMeter(MeanMetric):
         value = value[torch.isfinite(value)]
         return super().update(value)
 
+
 class ONGenericModule(nn.Module):
     def __init__(self, config_path):
         super().__init__()
-        
+
         # this config is default orienternet.yaml
         self.config = config_path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Device: {self.device}")
-        
+
         # only get configs if not training on clearml
         self.clearml = self.config.get("clearml", False)
         if not self.clearml:
             with open(config_path, "r") as file:
                 self.config = yaml.safe_load(file)
-                
+
         name = self.config["model"]["name"]
         self.model = get_model(name)(self.config["model"])
-        
+
         self.metrics_val = {}
         for name, metric in self.model.metrics().items():
             self.metrics_val[name] = metric.to(self.device)  # Move metric to device
-            
+
         # Add test metrics
         self.metrics_test = {}
         for name, metric in self.model.metrics().items():
             self.metrics_test[name] = metric.to(self.device)  # Move metric to device
-            
+
         self.train_losses = {}
         self.val_losses = None
         self.test_losses = None
         self.to(self.device)
-        
+
     def forward(self, batch):
         pred = self.model(batch)
         # Ensure prediction is on the same device as the input batch
-        pred = {k: v.to(batch['map'].device) if torch.is_tensor(v) else v 
-               for k, v in pred.items()}
+        pred = {
+            k: v.to(batch["map"].device) if torch.is_tensor(v) else v
+            for k, v in pred.items()
+        }
         return pred
-    
+
     def reset_train_losses(self):
         self.train_losses = {}
-    
+
     def training_step(self, batch):
         self.train()
         pred = self(batch)
         losses = self.model.loss(pred, batch)
-        
+
         if not self.train_losses:
             self.train_losses = {k: [] for k in losses.keys()}
         for k, v in losses.items():
             self.train_losses[k].append(v.mean().detach())
-        
+
         return losses["total"].mean()
-    
+
     def get_epoch_train_metrics(self):
         epoch_losses = {}
         for k, v in self.train_losses.items():
             epoch_losses[f"loss/{k}/train"] = torch.stack(v).mean()
         self.reset_train_losses()  # Reset for next epoch
-        return epoch_losses   
-    
-    
+        return epoch_losses
+
     def validation_step(self, batch):
         self.eval()
         with torch.no_grad():
             pred = self(batch)
             losses = self.model.loss(pred, batch)
-            
+
             # Initialize loss meters if not exists
             if self.val_losses is None:
                 self.val_losses = {
-                    k: AverageKeyMeter(k).to(self.device) for k in losses  # Move to device
+                    k: AverageKeyMeter(k).to(self.device)
+                    for k in losses  # Move to device
                 }
-            
+
             # Update metrics
             for metric in self.metrics_val.values():
                 metric(pred, batch)
-            
+
             # Update losses
             for meter in self.val_losses.values():
                 meter.update(losses)
-            
+
             return losses["total"].mean()
-        
-        
+
     def get_validation_metrics(self):
         metrics_dict = {}
-        
+
         # Get metric values
         for name, metric in self.metrics_val.items():
             metrics_dict[f"val/{name}"] = metric.compute()
             metric.reset()
-        
+
         # Get loss values
         if self.val_losses is not None:
             for name, meter in self.val_losses.items():
                 metrics_dict[f"loss/{name}/val"] = meter.compute()
                 meter.reset()
-            
+
         self.val_losses = None
         return metrics_dict
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.training.lr)
-        
+
         cfg_scheduler = self.config.training.get("lr_scheduler")
         if cfg_scheduler is not None:
             scheduler = getattr(torch.optim.lr_scheduler, cfg_scheduler.name)(
                 optimizer=optimizer, **cfg_scheduler.get("args", {})
             )
             return optimizer, scheduler
-        return optimizer       
-            
+        return optimizer
+
     def test_step(self, batch):
         """Perform a test step on a batch of data"""
         self.eval()
         with torch.no_grad():
             pred = self(batch)
             losses = self.model.loss(pred, batch)
-            
+
             # Initialize loss meters if not exists
             if self.test_losses is None:
                 self.test_losses = {
                     k: AverageKeyMeter(k).to(self.device) for k in losses
                 }
-            
+
             # Update metrics
             for metric in self.metrics_test.values():
                 metric(pred, batch)
-            
+
             # Update losses
             for meter in self.test_losses.values():
                 meter.update(losses)
-            
+
             return losses["total"].mean()
-    
+
     def get_test_metrics(self):
         """Get test metrics and losses"""
         metrics_dict = {}
-        
+
         # Get metric values
         for name, metric in self.metrics_test.items():
             metrics_dict[f"test/{name}"] = metric.compute()
             metric.reset()
-        
+
         # Get loss values
         if self.test_losses is not None:
             for name, meter in self.test_losses.items():
                 metrics_dict[f"loss/{name}/test"] = meter.compute()
                 meter.reset()
-            
+
         self.test_losses = None
         return metrics_dict
+
 
 # class GenericModule(pl.LightningModule):
 #     def __init__(self, cfg):
@@ -212,12 +216,12 @@ class ONGenericModule(nn.Module):
 #                 postfix="/val",
 #             )
 #         self.metrics_val(pred, batch)
-#         self.log_dict(self.metrics_val, 
+#         self.log_dict(self.metrics_val,
 #                       sync_dist=True,
 #                       on_step=False,
 #                       on_epoch=True)
 #         self.losses_val.update(losses)
-#         self.log_dict(self.losses_val, 
+#         self.log_dict(self.losses_val,
 #                       sync_dist=True,
 #                       on_step=False,
 #                       on_epoch=True)

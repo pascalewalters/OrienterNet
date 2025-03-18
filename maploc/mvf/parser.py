@@ -142,8 +142,10 @@ def match_to_group(label, patterns):
 class Patterns:
     wall = "polygon:wall"
 
+
 class Groups:
     wall = ["wall"]
+
 
 def group_elements(osm: OSMData):
     elem2group = {

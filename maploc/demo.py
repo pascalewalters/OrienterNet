@@ -95,30 +95,33 @@ def parse_location_prior(
 
 class Demo:
     def __init__(
-        self,
-        experiment_or_path: Optional[str] = "YYC_Baseline",
-        device=None,
-        **kwargs
+        self, experiment_or_path: Optional[str] = "YYC_Baseline", device=None, **kwargs
     ):
         if experiment_or_path in pretrained_models:
             experiment_or_path, _ = pretrained_models[experiment_or_path]
         path = resolve_checkpoint_path(experiment_or_path)
-        ckpt = torch.load(path, map_location=(lambda storage, loc: storage), weights_only=False)
+        ckpt = torch.load(
+            path, map_location=(lambda storage, loc: storage), weights_only=False
+        )
         # config = ckpt["hyper_parameters"]
-        
+
         config_path = "/home/kevinmeng/workspace/mappedin/VPS/OrienterNet/maploc/conf/orienternet.yaml"
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             # Convert the YAML to an OmegaConf object
             config = OmegaConf.create(yaml.safe_load(f))
-            
+
         # Set missing values that are needed for interpolation
-        if 'train' in config and 'training' in config.train and 'trainer' in config.train.training:
-            if 'experiment' not in config:
+        if (
+            "train" in config
+            and "training" in config.train
+            and "trainer" in config.train.training
+        ):
+            if "experiment" not in config:
                 config.experiment = OmegaConf.create({})
-            if 'gpus' not in config.experiment:
+            if "gpus" not in config.experiment:
                 config.experiment.gpus = 1  # Default value
                 config.experiment.name = "Orienternet_Baseline"
-            
+
         OmegaConf.resolve(config)
         # Now you can use dot notation with the config
         if kwargs:

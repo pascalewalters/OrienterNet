@@ -153,7 +153,7 @@ class MapArea(MapElement):
             rel.tags,
             outers=outers,
             # inners=inners,
-            inners = []
+            inners=[],
         )
 
     @classmethod
@@ -179,16 +179,16 @@ class MapData:
         self = cls()
 
         for node in osm.nodes.values():
-            self.nodes[node.id_] = MapNode.from_osm(node, 'node', 'node')
-    
+            self.nodes[node.id_] = MapNode.from_osm(node, "node", "node")
+
         # for way in osm.ways.values():
         #     # way_type = way.label
         #     print(way)
         #     print("__-----____")
         #     self.lines[way.id_] = MapLine.from_osm(way, 'way', 'way')
-        
+
         for way in osm.ways.values():
-        #for way in filter(filter_way, osm.ways.values()):
+            # for way in filter(filter_way, osm.ways.values()):
             label = parse_way(way.tags)
             if label is None:
                 continue
@@ -198,7 +198,6 @@ class MapData:
             if group is None:
                 continue  # missing
             self.lines[way.id_] = MapLine.from_osm(way, label, group)
-        
 
         # for rel in osm.relations.values():
         #     self.areas[rel.id_] = MapArea.from_relation(rel, 'area', 'area', osm)

@@ -117,7 +117,7 @@ class Colormap:
             np.where(
                 rasters[1, ..., None] > 0,
                 cls.colors_ways[rasters[1]],
-                default_color,  # Use a default color in replacement of areas 
+                default_color,  # Use a default color in replacement of areas
             )
             / 255.0
         )

@@ -64,7 +64,7 @@ class Canvas:
 def render_raster_masks(
     nodes: List[MapNode],
     lines: List[MapLine],
-    #areas: List[MapArea],
+    # areas: List[MapArea],
     canvas: Canvas,
 ) -> Dict[str, np.ndarray]:
     all_groups = Groups.ways + Groups.nodes
@@ -100,7 +100,7 @@ def mask_to_idx(group2mask: Dict[str, np.ndarray], groups: List[str]) -> np.ndar
 
 
 def render_raster_map(masks: Dict[str, np.ndarray]) -> np.ndarray:
-    #areas = mask_to_idx(masks, Groups.areas)
+    # areas = mask_to_idx(masks, Groups.areas)
     ways = mask_to_idx(masks, Groups.ways)
     nodes = mask_to_idx(masks, Groups.nodes)
     return np.stack([ways, nodes])

@@ -97,18 +97,15 @@ class MapLocDataset(torchdata.Dataset):
         (seed,) = np.random.SeedSequence(seed).generate_state(1)
 
         scene, image_id = self.names[idx]
-        
-        if self.cfg.init_from_gps:            
+
+        if self.cfg.init_from_gps:
             latlon_gps = [
-                torch.tensor([
-                    self.data['latitude'][idx],
-                    self.data['longitude'][idx]
-                ]).numpy()
+                torch.tensor(
+                    [self.data["latitude"][idx], self.data["longitude"][idx]]
+                ).numpy()
             ]
             # print(f"latlong coords: {latlon_gps}")
             xy_w_init = self.tile_managers[scene].projection.project(latlon_gps)
-            
-
 
         # error = np.random.RandomState(seed).uniform(-1, 1, size=2)
         # xy_w_init += error * self.cfg.max_init_error
@@ -125,50 +122,51 @@ class MapLocDataset(torchdata.Dataset):
             "index": idx,
             "name": image_id,
             "scene": scene,
-            #"sequence": None,
-        } 
+            # "sequence": None,
+        }
 
         # Simple orientation from bearing
         roll, pitch = 0.0, 0.0  # Assuming flat ground
-        yaw = self.data['bearing'][idx]  # Use bearing as yaw
-        
+        yaw = self.data["bearing"][idx]  # Use bearing as yaw
+
         # Load and process image
         image = read_image(self.image_dirs[scene] / (image_id))
-        
+
         # Create camera parameters for the image
         h, w = image.shape[:2]  # Get image dimensions
         cam_dict = {
             "model": "SIMPLE_RADIAL",
             "width": w,
             "height": h,
-            "params": np.array([
-                max(w, h) * 0.93,  # focal length estimate (based on ~66 degree FOV)
-                w/2,               # cx (principal point x)
-                h/2,               # cy (principal point y)
-                0.1                # k1 (radial distortion)
-            ])
+            "params": np.array(
+                [
+                    max(w, h) * 0.93,  # focal length estimate (based on ~66 degree FOV)
+                    w / 2,  # cx (principal point x)
+                    h / 2,  # cy (principal point y)
+                    0.1,  # k1 (radial distortion)
+                ]
+            ),
         }
         cam = Camera.from_dict(cam_dict).float()
         image, valid = self.process_image(image, seed)
 
         # raster extraction
         canvas = self.tile_managers[scene].query(bbox_tile)
-        
+
         # Get ground truth position from lat/long
-        latlon_gt = torch.tensor([
-            self.data['latitude'][idx],
-            self.data['longitude'][idx]
-        ]).numpy()
-        
+        latlon_gt = torch.tensor(
+            [self.data["latitude"][idx], self.data["longitude"][idx]]
+        ).numpy()
+
         # world coordinates
         xy_w_gt = self.tile_managers[scene].projection.project(latlon_gt)
-        
+
         uv_gt = canvas.to_uv(xy_w_gt)
         uv_init = canvas.to_uv(bbox_tile.center)
         raster = canvas.raster
-        
+
         if uv_gt.ndim > 1:
-            uv_gt = uv_gt.squeeze() 
+            uv_gt = uv_gt.squeeze()
 
         # Map augmentations for training
         heading = np.deg2rad(90 - yaw)
@@ -206,44 +204,49 @@ class MapLocDataset(torchdata.Dataset):
             .float()
             .div_(255)
         )
-        
+
         # Create valid mask (all pixels are valid)
         valid = torch.ones_like(image[0], dtype=torch.bool)
 
         # Resize if needed
         if self.cfg.resize_image is not None:
             target_size = self.cfg.resize_image
-            
+
             # First resize maintaining aspect ratio
             h, w = image.shape[-2:]
             scale = target_size / max(h, w)
             new_h = int(h * scale)
             new_w = int(w * scale)
-            
+
             # Resize keeping aspect ratio
             image = F.interpolate(
                 image.unsqueeze(0),
                 size=(new_h, new_w),
-                mode='bilinear',
-                align_corners=False
+                mode="bilinear",
+                align_corners=False,
             ).squeeze(0)
-            
-            valid = F.interpolate(
-                valid.unsqueeze(0).unsqueeze(0).float(),
-                size=(new_h, new_w),
-                mode='nearest'
-            ).squeeze(0).squeeze(0).bool()
-            
+
+            valid = (
+                F.interpolate(
+                    valid.unsqueeze(0).unsqueeze(0).float(),
+                    size=(new_h, new_w),
+                    mode="nearest",
+                )
+                .squeeze(0)
+                .squeeze(0)
+                .bool()
+            )
+
             # Create padded tensors
             padded_image = torch.zeros((3, target_size, target_size), dtype=image.dtype)
             padded_valid = torch.zeros((target_size, target_size), dtype=valid.dtype)
-            
+
             pad_h = (target_size - new_h) // 2
             pad_w = (target_size - new_w) // 2
-            
-            padded_image[:, pad_h:pad_h+new_h, pad_w:pad_w+new_w] = image
-            padded_valid[pad_h:pad_h+new_h, pad_w:pad_w+new_w] = valid
-            
+
+            padded_image[:, pad_h : pad_h + new_h, pad_w : pad_w + new_w] = image
+            padded_valid[pad_h : pad_h + new_h, pad_w : pad_w + new_w] = valid
+
             image = padded_image
             valid = padded_valid
 

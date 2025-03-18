@@ -70,7 +70,7 @@ def render_raster_masks(
 
     for area in areas:
         # canvas.raster = masks[area.group]
-        canvas.raster = masks['parking']
+        canvas.raster = masks["parking"]
         outlines = area.outers + area.inners
         canvas.draw_multipolygon(outlines)
         # if area.group == "building":
@@ -81,13 +81,13 @@ def render_raster_masks(
     for line in lines:
         print(line)
         if line.group == "window":
-            canvas.raster = masks['window']
-        else: 
-            canvas.raster = masks['playground']
+            canvas.raster = masks["window"]
+        else:
+            canvas.raster = masks["playground"]
         canvas.draw_line(line.xy)
 
     for node in nodes:
-        canvas.raster = masks['grass']
+        canvas.raster = masks["grass"]
         canvas.draw_cell(node.xy)
 
     return masks

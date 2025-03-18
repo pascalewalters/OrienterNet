@@ -136,3 +136,6 @@ dmypy.json
 
 # vscode
 .vscode
+
+*.pt
+stage_data_structure.txt
