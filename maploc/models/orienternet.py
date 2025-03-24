@@ -2,7 +2,7 @@
 
 import numpy as np
 import torch
-from torch.nn.functional import normalize
+from torch.nn.functional import normalize, softmax
 
 from . import get_model
 from .base import BaseModel
@@ -150,6 +150,14 @@ class OrienterNet(BaseModel):
         # pred["scores_unmasked"] = scores.clone()
         if "map_mask" in data:
             scores.masked_fill_(~data["map_mask"][..., None], -np.inf)
+
+            # # Apply softmax only over valid regions
+            # masked_pred = scores * data["map_mask"].float().unsqueeze(1)  # Add channel dim
+            # masked_pred = softmax(masked_pred.view(masked_pred.shape[0], -1), dim=1)
+            # masked_pred = masked_pred.view_as(scores)
+
+            # # Zero out predictions outside mask
+            # scores = masked_pred * data["map_mask"].float().unsqueeze(1)
         if "yaw_prior" in data:
             mask_yaw_prior(scores, data["yaw_prior"], self.conf.num_rotations)
         log_probs = log_softmax_spatial(scores)

@@ -164,6 +164,7 @@ class MapLocDataset(torchdata.Dataset):
         uv_gt = canvas.to_uv(xy_w_gt)
         uv_init = canvas.to_uv(bbox_tile.center)
         raster = canvas.raster
+        print("raster shape: ", raster.shape)
 
         if uv_gt.ndim > 1:
             uv_gt = uv_gt.squeeze()
