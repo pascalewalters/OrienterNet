@@ -95,7 +95,7 @@ train:
     name: ???
     gpus: 1
     seed: 0
-    pretrained_path: "experiments/OrienterNet_MVF_YYC_pretrain_cropmap/best-model-epoch-01.pt"
+    pretrained_path: "OrienterNet_MGL"
     clearml: true
   training:
     lr: 1e-4 # 1e-4

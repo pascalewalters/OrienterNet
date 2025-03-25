@@ -15,6 +15,7 @@ from maploc import EXPERIMENTS_PATH, logger
 from maploc.module import ONGenericModule
 from maploc.data.yyc.dataset import create_dataloader
 from maploc_mvf.mvf_dataset import YYCDatasetMVF
+from maploc.evaluation.run import resolve_checkpoint_path
 
 
 def set_seed(seed):
@@ -38,6 +39,7 @@ def save_checkpoint(model, optimizer, epoch, path, is_best=False):
 
 def load_pretrained_weights(model, checkpoint_path, device):
     """Load pretrained weights handling different number of classes"""
+    checkpoint_path = resolve_checkpoint_path(checkpoint_path)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state_dict = checkpoint["state_dict"]
     model_dict = model.state_dict()
