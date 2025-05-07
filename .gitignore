@@ -139,3 +139,5 @@ dmypy.json
 
 *.pt
 stage_data_structure.txt
+
+__pycache__/

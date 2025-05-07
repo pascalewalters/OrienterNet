@@ -44,28 +44,21 @@ model:
   validation_visualization: true  # Save validation prediction visualizations
 
 data:
-  name: yyc
+  name: naver
   paths:
-    combined_geojson_path: "/home/pascale/Documents/VPS/Mappedin_VPS_Data/YYC_VPS/user_data/combined-output.geojson"
-    photos_dir: "/home/pascale/Documents/VPS/Mappedin_VPS_Data/YYC_VPS/user_data/photos_rectified/photos/"
-    valid_dir: "/home/pascale/Documents/VPS/Mappedin_VPS_Data/YYC_VPS/user_data/photos_rectified/valid/"
-    split_file: "/home/pascale/Documents/VPS/OrienterNet/image_splits.json"
-    map_data_path: "/home/pascale/Documents/VPS/OrienterNet_MVF/map_data.pkl"
-    raster_map_path: "/home/pascale/Documents/VPS/OrienterNet_MVF/"
-    area_index_path: "/home/pascale/Documents/VPS/OrienterNet_MVF/layer_to_index.json"
-    line_index_path: "/home/pascale/Documents/VPS/OrienterNet_MVF/line_to_index.json"
-  scenes:
-    - f_64ff43abbf8c6fef25f86282
-    - f_64ff43e17107d168de589c1a
-    - f_64ff44007107d168de589c1b
-    - f_6509bfcef7649384963d5949
-    - f_6509bfee66c66bc61ee6b49c
-    - f_6509c038f7649384963d594a
-  split: image_splits.json
+    combined_geojson_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/merged.geojson"
+    photos_dir: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/merged_images/"
+    valid_dir: ""
+    split_file: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/merged_splits.json"
+    mvf_data_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/mvf_data/"
+    raster_map_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/raster_maps"
+    area_index_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/area_index_mapping.json"
+    line_index_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/line_index_mapping.json"
   loading:
     train:
       batch_size: 1 # was 12 but OOM
-      num_workers: ${.batch_size}
+      # num_workers: ${.batch_size}
+      num_workers: 1
     val:
       batch_size: ${..train.batch_size}
       num_workers: ${.batch_size}
@@ -74,18 +67,18 @@ data:
       num_workers: ${.batch_size}
   # map data
   num_classes:
-    areas: 27
+    areas: 3
+    ways: 4
     nodes: 1
-    ways: 2
   pixel_per_meter: 2
   crop_size_meters: 64
   max_init_error: 48
-  add_map_mask: false
-  map_resize_dim: 360
+  add_map_mask: true
+  map_resize_dim: 256
   mask_radius: 
   mask_pad: 1
   # preprocessing
-  resize_image: 512
+  resize_image: 256
   pad_to_square: true
   rectify_pitch: true
   augmentation:
@@ -103,8 +96,12 @@ train:
     pretrained_path: "orienternet_mgl.ckpt"
     clearml: true
   training:
-    lr: 1e-5 # 1e-4
-    lr_scheduler: null
+    lr: 1e-4 # 1e-4
+    lr_scheduler:
+      # Option 1: StepLR - decreases lr by gamma every step_size epochs
+      name: "step"
+      step_size: 3
+      gamma: 0.1
     finetune_from_checkpoint: null
     trainer:
       max_epochs: 10
@@ -122,10 +119,10 @@ train:
       chdir: false
 
 clearml:
-  project_name: "OrienterNet"
+  project_name: "SymbolDetection"
   task_name: "orienternet_training"
   output_uri: true
-  dataset_id: 611d00b34de04730b65c23fdb471a780
+  dataset_id: 7d56d648221f4c79ae045b0e4d6cb645
   # for YYC images: e5bce8143ec6423cac891a31f123bb9a
   # for e57: d39cb0ea44c04b23870dde88f8b7b583
   # orienternet_dataset_test: a0ca14beec574088b23e64820ad6e690
