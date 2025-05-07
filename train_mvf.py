@@ -7,14 +7,16 @@ import numpy as np
 import json
 import hydra
 import torch
-from torch.utils.tensorboard import SummaryWriter
 from omegaconf import DictConfig, OmegaConf
-from clearml import Task
+from clearml import Task, Dataset
+import tqdm
 
 from maploc import EXPERIMENTS_PATH, logger
 from maploc.module import ONGenericModule
 from maploc.data.yyc.dataset import create_dataloader
-from maploc_mvf.mvf_dataset import YYCDatasetMVF
+
+# from maploc_mvf.mvf_dataset import YYCDatasetMVF
+from maploc_mvf.mvf_dataset_selfserve import NaverDatasetMVF
 from maploc.evaluation.run import resolve_checkpoint_path
 
 
@@ -84,7 +86,7 @@ def train(config: DictConfig):
 
     model = ONGenericModule(config).to(device)
     # Load state dict, handling potential key mismatches
-    load_pretrained_weights(model, config.train.experiment.pretrained_path, device)
+    # load_pretrained_weights(model, config.train.experiment.pretrained_path, device)
 
     # setup directories
     experiment_dir = osp.join(EXPERIMENTS_PATH, config.experiment.name)
@@ -94,11 +96,8 @@ def train(config: DictConfig):
     optimizer = model.configure_optimizers()
     scheduler = None
     if isinstance(optimizer, tuple):
-        optimizer, schedule = optimizer
+        optimizer, scheduler = optimizer
 
-    # init dataloaders
-    # if config.clearml.dataset_id:
-    #     # ClearML init
     if config.train.experiment.clearml:
         task = Task.init(
             project_name="OrienterNet",
@@ -109,17 +108,34 @@ def train(config: DictConfig):
         task.force_requirements_env_freeze(force=True, requirements_file=None)
         task.connect(config)
 
-        #     dataset = Dataset.get(dataset_id=config.clearml.dataset_id)
-        #     local_data_path = dataset.get_local_copy()
-        #     # Update the data_dir path in the nested config
-        #     config.data.paths.data_dir = str(local_data_path)
-        #     config.data.paths.combined_geojson_path = (
-        #         str(local_data_path) + "/combined-output.geojson"
-        #     )  # TODO: CHANGE FROM e57 when training normal
+        dataset = Dataset.get(dataset_id=config.clearml.dataset_id)
+        # dataset = Dataset.get(
+        #     dataset_name="basemaps_no_symbols",
+        #     dataset_project="SymbolDetection",
+        #     dataset_version="1.0.0"
+        # )
 
-    train_dataset = YYCDatasetMVF(config, stage="train")
-    val_dataset = YYCDatasetMVF(config, stage="val")
-    test_dataset = YYCDatasetMVF(config, stage="test")
+        local_data_path = dataset.get_local_copy()
+        # Update the data_dir path in the nested config
+        config.data.paths.data_dir = str(local_data_path)
+        config.data.paths.combined_geojson_path = (
+            str(local_data_path) + "/merged.geojson"
+        )
+        config.data.paths.photos_dir = str(local_data_path) + "/merged_images"
+        config.data.paths.valid_dir = str(local_data_path) + "/valid"
+        config.data.paths.split_file = str(local_data_path) + "/merged_splits.json"
+        config.data.paths.mvf_data_path = str(local_data_path) + "/mvf_data/"
+        config.data.paths.raster_map_path = str(local_data_path) + "/raster_maps/"
+        config.data.paths.area_index_path = (
+            str(local_data_path) + "/area_index_mapping.json"
+        )
+        config.data.paths.line_index_path = (
+            str(local_data_path) + "/line_index_mapping.json"
+        )
+
+    train_dataset = NaverDatasetMVF(config, stage="train")
+    val_dataset = NaverDatasetMVF(config, stage="val")
+    test_dataset = NaverDatasetMVF(config, stage="test")
 
     print(f"Training dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
@@ -129,15 +145,15 @@ def train(config: DictConfig):
     val_loader = create_dataloader(val_dataset, config, "val")
     test_loader = create_dataloader(test_dataset, config, "test")
 
-    writer = SummaryWriter(osp.join(experiment_dir, "tensorboard"))
-
-    # Training loop
     best_val_loss = float("inf")
 
     for epoch in range(config.train.training.trainer.max_epochs):
         model.reset_train_losses()
-        # train epoch
-        for _, batch in enumerate(train_loader):
+
+        # Train loop
+        for _, batch in tqdm.tqdm(
+            enumerate(train_loader), desc="Training", total=len(train_loader)
+        ):
             batch = {
                 k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()
             }
@@ -146,6 +162,8 @@ def train(config: DictConfig):
             loss = model.training_step(batch)
             loss.backward()
             optimizer.step()
+
+            break
 
         train_metrics = model.get_epoch_train_metrics()
 
@@ -158,6 +176,7 @@ def train(config: DictConfig):
                     for k, v in batch.items()
                 }
                 model.validation_step(batch)
+                break
 
         val_metrics = model.get_validation_metrics()
 
@@ -165,7 +184,6 @@ def train(config: DictConfig):
             **train_metrics,
             **val_metrics,
         }.items():
-            writer.add_scalar(name, value, epoch)
             if config.clearml.dataset_id:
                 task.get_logger().report_scalar(
                     title=name, series="Metrics", value=value, iteration=epoch
@@ -229,7 +247,7 @@ def train(config: DictConfig):
 @hydra.main(
     version_base=None,
     config_path=osp.join(osp.dirname(__file__), "maploc", "conf"),
-    config_name="orienternet_mvf",
+    config_name="orienternet_mvf_naver",
 )
 def main(cfg: DictConfig) -> None:
     """Run training with the given configuration."""

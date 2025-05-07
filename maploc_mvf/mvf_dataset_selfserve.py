@@ -17,8 +17,6 @@ from maploc.utils.io import read_image
 from maploc.utils.wrappers import Camera
 from maploc.data.utils import random_flip, random_rot90
 
-from naver_scripts.load_map_selfserve import MVF
-
 
 def process_image(image, resize_image=None):
     """Process image for training"""
@@ -137,9 +135,9 @@ def create_local_mercator_transform(ref_lat, ref_lon):
     return Transformer.from_proj(wgs84, local_mercator, always_xy=True)
 
 
-class YYCDatasetMVF(Dataset):
+class NaverDatasetMVF(Dataset):
     """
-    Dataset class for the YYC dataset
+    Dataset class for the Naver dataset
     """
 
     def __init__(self, cfg: Dict[str, Any], stage: str):
@@ -161,16 +159,19 @@ class YYCDatasetMVF(Dataset):
             self.map_ids = list(split.keys())
 
             self.image_names = []
+            val_image_names = []
+            test_image_names = []
             for map_id in self.map_ids:
                 self.image_names.extend(split[map_id])
+                val_image_names.extend(splits_data["val"][map_id])
+                test_image_names.extend(splits_data["test"][map_id])
 
             # Build the ground truth data dictionary to be accessed at train time
             self.gt_data_dict = {}
             for feature in geojson_data["features"]:
-                if feature["properties"]["map"] in self.map_ids:
-                    image_name = "".join(
-                        feature["properties"]["imageUrl"].split(".")[:-1]
-                    )
+                # if feature["properties"]["map"] in self.map_ids:
+                image_name = "".join(feature["properties"]["imageUrl"].split(".")[:-1])
+                if image_name in self.image_names:
                     self.gt_data_dict[image_name] = {
                         "image_url": feature["properties"]["imageUrl"],
                         "map": feature["properties"]["map"],
@@ -179,6 +180,7 @@ class YYCDatasetMVF(Dataset):
                         "longitude": feature["geometry"]["coordinates"][0],
                         "altitude": feature["geometry"]["coordinates"][2],
                     }
+
         elif self.stage == "test":
             dont_use_map_ids = []
             dont_use_image_names = []
@@ -204,6 +206,7 @@ class YYCDatasetMVF(Dataset):
                     }
                     self.image_names.append(image_name)
                     self.map_ids.append(feature["properties"]["map"])
+            self.map_ids = list(set(self.map_ids))
 
         else:
             raise NotImplementedError(f"Split is not recognized: {self.stage}")
@@ -214,14 +217,20 @@ class YYCDatasetMVF(Dataset):
                 self.cfg.data.paths.raster_map_path, f"raster_map_{map_id}.npy"
             )
 
-        with open(self.cfg.data.paths.map_data_path, "rb") as f:
-            self.map_dict = pickle.load(f)
+        self.mvf_data = {}
+        for map_id in self.map_ids:
+            mvf_data_path = Path(
+                self.cfg.data.paths.mvf_data_path, f"{map_id}_mvf_data.pkl"
+            )
+            with open(mvf_data_path, "rb") as f:
+                mvf_data = pickle.load(f)
 
-        ref_lon = self.map_dict["center_point_x"]
-        ref_lat = self.map_dict["center_point_y"]
-
-        # Create transformer for local Mercator projection
-        self.transformer = create_local_mercator_transform(ref_lat, ref_lon)
+            self.mvf_data[map_id] = {
+                "spaces": mvf_data[map_id]["spaces"],
+                "transformer": create_local_mercator_transform(
+                    mvf_data["center_point_lat"], mvf_data["center_point_lon"]
+                ),
+            }
 
         # Load transforms
         tfs = []
@@ -243,6 +252,7 @@ class YYCDatasetMVF(Dataset):
 
         # Convert raster from tensor [C,H,W] to numpy [H,W,C]
         raster = data["map"].permute(1, 2, 0).numpy()
+        canvas_scaling = [raster.shape[1], raster.shape[0]]
 
         # Create colored visualization where each channel gets its own color
         colors = [
@@ -262,6 +272,8 @@ class YYCDatasetMVF(Dataset):
 
         # Get UV coordinates
         uv = data["uv"].numpy()
+        u = (uv[0] * canvas_scaling[0] / 2) + canvas_scaling[0] / 2
+        v = (uv[1] * canvas_scaling[1] / 2) + canvas_scaling[1] / 2
 
         # Convert map mask from tensor to numpy if it exists
         map_mask = data["map_mask"].numpy() if "map_mask" in data else None
@@ -275,7 +287,7 @@ class YYCDatasetMVF(Dataset):
 
         # Plot colored raster map
         axes[0, 1].imshow(colored_raster)
-        axes[0, 1].scatter(uv[0], uv[1], c="white", marker="x", s=100)
+        axes[0, 1].scatter(u, v, c="white", marker="x", s=100)
         axes[0, 1].set_title("Raster Map with UV Point")
 
         # Add legend
@@ -298,17 +310,17 @@ class YYCDatasetMVF(Dataset):
             combined = colored_raster.copy()
             combined[map_mask] = combined[map_mask] * 0.5  # Darken masked areas
             axes[1, 1].imshow(combined)
-            axes[1, 1].scatter(uv[0], uv[1], c="white", marker="x", s=100)
+            axes[1, 1].scatter(u, v, c="white", marker="x", s=100)
             axes[1, 1].set_title("Combined View")
 
         plt.tight_layout()
         plt.show()
 
-    def transform_coordinates(self, lat, lon):
+    def transform_coordinates(self, lat, lon, map_id):
         """Transform WGS84 coordinates to local Mercator"""
         try:
             # Note: transformer expects (lon, lat) order when always_xy=True
-            east, north = self.transformer.transform(lon, lat)
+            east, north = self.mvf_data[map_id]["transformer"].transform(lon, lat)
 
             # Validate output is finite
             if not (math.isfinite(east) and math.isfinite(north)):
@@ -316,7 +328,7 @@ class YYCDatasetMVF(Dataset):
                     f"Transform produced non-finite values: east={east}, north={north}"
                 )
 
-            return east, north
+            return np.array([east, north], dtype=np.float64)
 
         except Exception as e:
             print(f"Transform failed for lat={lat}, lon={lon}")
@@ -325,6 +337,13 @@ class YYCDatasetMVF(Dataset):
     def to_uv(self, xy, xy_min, xy_max, canvas_scaling):
         """
         Convert xy (meters) to uv (canvas coordinates)
+        Args:
+            xy: position in meters [x, y]
+            xy_min: minimum bounds in meters
+            xy_max: maximum bounds in meters
+            canvas_scaling: image dimensions [width, height]
+        Returns:
+            uv coordinates centered and normalized [-1, 1]
         """
         min_ = xy_min
         max_ = xy_max
@@ -332,48 +351,51 @@ class YYCDatasetMVF(Dataset):
             min_ = torch.from_numpy(min_).to(xy)
             max_ = torch.from_numpy(max_).to(xy)
 
-        canvas_coords_0 = (xy[0] - min_[0]) * self.cfg.data.pixel_per_meter
-        canvas_coords_1 = (max_[1] - xy[1]) * self.cfg.data.pixel_per_meter
+        # Convert to pixel coordinates first
+        u = (xy[0] - min_[0]) * self.cfg.data.pixel_per_meter
+        v = (xy[1] - min_[1]) * self.cfg.data.pixel_per_meter
 
-        # return [
-        #     int(canvas_coords_0 * self.cfg.data.map_resize_dim / canvas_scaling[0]),
-        #     int(canvas_coords_1 * self.cfg.data.map_resize_dim / canvas_scaling[1]),
-        # ]
-        return [int(canvas_coords_0), int(canvas_coords_1)]
+        u = np.clip(u, 1, canvas_scaling[0] - 1)
+        v = np.clip(v, 1, canvas_scaling[1] - 1)
 
-    def create_map_mask(self, bounding_shapes, canvas_scaling, xy_min, xy_max, raster):
+        u, v = self.pixel_to_normalized_uv([u, v], canvas_scaling)
+
+        return [u, v]
+
+    def create_map_mask(self, spaces, canvas_scaling, xy_min, xy_max, raster, map_id):
         """
         Create a map mask by setting all pixels outside of the bounding shapes to False
         """
-        c, h, w = raster.shape
-        # map_mask = np.zeros(
-        #     (self.cfg.data.map_resize_dim, self.cfg.data.map_resize_dim),
-        #     dtype=np.uint8,
-        # )
+        _, h, w = raster.shape
         map_mask = np.zeros(
             (h, w),
             dtype=np.uint8,
         )
-        for shape in bounding_shapes:
+        for space in spaces:
             canvas_coords = []
-            for point in shape.exterior.coords:
-                xy_w = np.array(self.transform_coordinates(point[1], point[0]))
-                vu = self.to_uv(xy_w, xy_min, xy_max, canvas_scaling)
-                canvas_coords.append(vu)
+            for point in space.shape.polygon.exterior.coords:
+                # Convert lat/lon to local meters
+                xy_w = np.array(self.transform_coordinates(point[1], point[0], map_id))
+                # Convert meters to normalized UV coordinates
+                uv = self.to_uv(xy_w, xy_min, xy_max, canvas_scaling)
+                # Convert normalized UV to pixel coordinates
+                pixel_u, pixel_v = self.normalized_to_pixel_uv(uv, [w, h])
+                canvas_coords.append([pixel_u, pixel_v])
 
+            # Convert to numpy array
             canvas_coords = np.array(canvas_coords).astype(np.int32)
-            map_mask = cv2.fillPoly(map_mask, [canvas_coords], 255)
 
-        # map_mask = np.flipud(map_mask)
+            # Fill polygon with ones
+            cv2.fillPoly(map_mask, [canvas_coords], 1)
 
-        return cv2.threshold(map_mask, 127, 1, cv2.THRESH_BINARY)[1].astype(bool)
+        return map_mask.astype(bool)
 
     def random_crop_around_point(self, raster, uv_point, map_mask, crop_size):
         """
         Randomly crop raster centered around UV point
         Args:
             raster: [C,H,W] raster map
-            uv_point: [2] UV coordinates
+            uv_point: [2] Normalized UV coordinates in range [-1,1]
             map_mask: [H,W] boolean mask
             crop_size: Integer size of square crop
         Returns:
@@ -381,50 +403,92 @@ class YYCDatasetMVF(Dataset):
             cropped_mask: [crop_size,crop_size]
             new_uv: [2] Updated UV coordinates in cropped space
         """
-        c, h, w = raster.shape
-
-        # Ensure UV point is within crop bounds
+        _, h, w = raster.shape
         half_size = crop_size // 2
+        pixel_u, pixel_v = self.normalized_to_pixel_uv(uv_point, [w, h])
 
-        # Ensure center point stays within valid crop bounds
-        center_x = np.clip(int(uv_point[0]), half_size, w - half_size)
-        center_y = np.clip(int(uv_point[1]), half_size, h - half_size)
+        if w < crop_size:
+            new_u = uv_point[0]
+            x1 = 0
+            x2 = w
+        else:
+            pixel_u = np.clip(pixel_u, 1, w - 1)
+            max_offset_x = min(pixel_u, w - pixel_u, half_size)
+            offset_x = np.random.randint(-max_offset_x, max_offset_x)
+            center_x = pixel_u + offset_x
+            x1 = np.clip(center_x - half_size, 0, w - crop_size)
+            x2 = x1 + crop_size
 
-        # Calculate valid range for random offset
-        max_offset = half_size
-        offset_x = np.random.randint(-max_offset, max_offset)
-        offset_y = np.random.randint(-max_offset, max_offset)
+            # Convert pixel coordinates back to normalized UV in cropped space
+            new_pixel_u = pixel_u - x1
+            # Convert back to normalized coordinates [-1, 1]
+            new_u = (new_pixel_u / (crop_size / 2)) - 1
 
-        # Apply offset while ensuring crop stays within image bounds
-        center_x = np.clip(center_x + offset_x, half_size, w - half_size)
-        center_y = np.clip(center_y + offset_y, half_size, h - half_size)
+        if h < crop_size:
+            new_v = uv_point[1]
+            y1 = 0
+            y2 = h
+        else:
+            pixel_v = np.clip(pixel_v, 1, h - 1)
+            max_offset_y = min(pixel_v, h - pixel_v, half_size)
+            offset_y = np.random.randint(-max_offset_y, max_offset_y)
+            center_y = pixel_v + offset_y
+            y1 = np.clip(center_y - half_size, 0, h - crop_size)
+            y2 = y1 + crop_size
 
-        # Calculate crop coordinates
-        x1 = center_x - half_size
-        x2 = center_x + half_size
-        y1 = center_y - half_size
-        y2 = center_y + half_size
-
-        # Debug checks
-        assert x1 >= 0 and y1 >= 0, f"Negative coordinates: x1={x1}, y1={y1}"
-        assert (
-            x2 <= w and y2 <= h
-        ), f"Coordinates exceed bounds: x2={x2}/{w}, y2={y2}/{h}"
+            # Convert pixel coordinates back to normalized UV in cropped space
+            new_pixel_v = pixel_v - y1
+            # Convert back to normalized coordinates [-1, 1]
+            new_v = (new_pixel_v / (crop_size / 2)) - 1
 
         # Crop raster and mask
         cropped_raster = raster[:, y1:y2, x1:x2]
         cropped_mask = map_mask[y1:y2, x1:x2] if map_mask is not None else None
 
-        # Update UV coordinates relative to crop
-        new_uv = np.array([uv_point[0] - x1, uv_point[1] - y1])
+        return cropped_raster, cropped_mask, np.array([new_u, new_v])
 
-        return cropped_raster, cropped_mask, new_uv
+    def normalized_to_pixel_uv(self, uv_normalized, canvas_size):
+        """Convert normalized UV coordinates [-1,1] to pixel coordinates"""
+        pixel_u = int((uv_normalized[0] + 1) * (canvas_size[0] / 2))
+        pixel_v = int((uv_normalized[1] + 1) * (canvas_size[1] / 2))
+        return np.array([pixel_u, pixel_v])
+
+    def pixel_to_normalized_uv(self, uv_pixels, canvas_size):
+        """Convert pixel coordinates back to normalized UV coordinates [-1,1]"""
+        u = (uv_pixels[0] / (canvas_size[0] / 2)) - 1
+        v = (uv_pixels[1] / (canvas_size[1] / 2)) - 1
+        return np.array([u, v])
 
     def __len__(self):
         return len(self.image_names)
 
+    def validate_uv_point(self, uv_point, canvas_size, image_name):
+        """
+        Validate if UV point falls within map bounds
+        Args:
+            uv_point: [2] Normalized UV coordinates in range [-1,1]
+            canvas_size: [width, height] of map
+            image_name: Name of image for logging
+        Returns:
+            bool: True if valid, False if invalid
+        """
+        pixel_u, pixel_v = self.normalized_to_pixel_uv(uv_point, canvas_size)
+
+        # Check if point is within bounds
+        if (
+            pixel_u < 0
+            or pixel_u >= canvas_size[0]
+            or pixel_v < 0
+            or pixel_v >= canvas_size[1]
+        ):
+            print(
+                f"Warning: Point {[pixel_u, pixel_v]} outside map bounds {canvas_size} "
+                f"for image {image_name}"
+            )
+            return False
+        return True
+
     def __getitem__(self, idx):
-        print("here")
         if self.stage == "train" and self.cfg.data.random:
             seed = None
         else:
@@ -433,16 +497,15 @@ class YYCDatasetMVF(Dataset):
 
         image_name = self.image_names[idx]
         image_data = self.gt_data_dict[image_name]
+
         image_path = Path(self.cfg.data.paths.photos_dir, image_data["image_url"])
+
         # Load and process image
         image = read_image(image_path)
+        # Not using the valid image for the Naver dataset. It seems to be a mask for the image
         # valid_path = Path(self.cfg.data.paths.valid_dir, image_data["image_url"])
         # valid = read_image(valid_path)
         valid = np.ones_like(image)
-
-        # Simple orientation from bearing
-        roll, pitch = 0.0, 0.0  # Assuming flat ground
-        yaw = float(image_data["bearing"])  # Use bearing as yaw
 
         # Create camera parameters for the image
         h, w = image.shape[:2]  # Get image dimensions
@@ -468,31 +531,38 @@ class YYCDatasetMVF(Dataset):
 
         # Get raster map data
         raster = np.load(self.raster_maps[image_data["map"]])
-        raster = np.transpose(raster, (2, 0, 1))
 
-        bounds = [
-            bounding_shape.bounds
-            for bounding_shape in self.map_dict[image_data["map"]]["bounding_shapes"]
+        lat_lon_bounds = [
+            space.shape.polygon.exterior.bounds
+            for space in self.mvf_data[image_data["map"]]["spaces"]
         ]
-        bounds = np.array(bounds)
-        lon_min, lat_min = min(bounds[:, 0]), min(bounds[:, 1])
-        lon_max, lat_max = max(bounds[:, 2]), max(bounds[:, 3])
+        lat_lon_bounds = np.array(lat_lon_bounds, dtype=np.float64)
 
-        east_min, north_min = self.transform_coordinates(lat_min, lon_min)
-        east_max, north_max = self.transform_coordinates(lat_max, lon_max)
+        # Get ground truth position from lat/long
+        latlon_gt = np.array(
+            [image_data["latitude"], image_data["longitude"]], dtype=np.float64
+        )
+
+        lon_min = min(lat_lon_bounds[:, 0])
+        lat_min = min(lat_lon_bounds[:, 1])
+        lon_max = max(lat_lon_bounds[:, 2])
+        lat_max = max(lat_lon_bounds[:, 3])
+
+        # Transform to local coordinates
+        east_min, north_min = self.transform_coordinates(
+            lat_min, lon_min, image_data["map"]
+        )
+        east_max, north_max = self.transform_coordinates(
+            lat_max, lon_max, image_data["map"]
+        )
 
         bounding_box_size = np.array([east_max - east_min, north_max - north_min])
         canvas_scaling = np.ceil(
             bounding_box_size * self.cfg.data.pixel_per_meter
         ).astype(int)
 
-        # Get ground truth position from lat/long
-        latlon_gt = torch.tensor(
-            [image_data["latitude"], image_data["longitude"]]
-        ).numpy()
-
         # Coordinates in meters from the centroid of the whole airport
-        xy_w_gt = np.array(self.transform_coordinates(*latlon_gt))
+        xy_w_gt = np.array(self.transform_coordinates(*latlon_gt, image_data["map"]))
 
         # Get coordinates in the canvas
         uv_gt = np.array(
@@ -503,6 +573,11 @@ class YYCDatasetMVF(Dataset):
                 canvas_scaling,
             )
         )
+
+        # Validate UV coordinates
+        if not self.validate_uv_point(uv_gt, canvas_scaling, image_name):
+            # Skip to next valid sample
+            return self.__getitem__((idx + 1) % len(self))
 
         map_center_xy = [
             east_min + (east_max - east_min) / 2,
@@ -517,17 +592,15 @@ class YYCDatasetMVF(Dataset):
             )
         )
 
-        # Map augmentations for training
-        heading = np.deg2rad(90 - yaw)
-
         # Optional: create mask for search area
         if self.cfg.data.add_map_mask:
             map_mask = self.create_map_mask(
-                self.map_dict[image_data["map"]]["bounding_shapes"],
+                self.mvf_data[image_data["map"]]["spaces"],
                 canvas_scaling,
                 np.array([east_min, north_min]),
                 np.array([east_max, north_max]),
                 raster,
+                image_data["map"],
             )
         else:
             map_mask = np.ones(
@@ -540,19 +613,36 @@ class YYCDatasetMVF(Dataset):
             raster, uv_gt, map_mask, self.cfg.data.map_resize_dim
         )
 
+        # Simple orientation from bearing
+        roll, pitch = 0.0, 0.0  # Assuming flat ground
+        yaw = float(image_data["bearing"])  # Use bearing as yaw
+
         # Apply augmentations
         if self.stage == "train":
             if self.cfg.data.augmentation.rot90:
-                raster, uv_gt, heading, map_mask = random_rot90(
-                    raster, uv_gt, heading, map_mask, seed
+                # Convert UV to pixel coordinates
+                h, w = raster.shape[-2:]
+                uv_pixels = self.normalized_to_pixel_uv(uv_gt, [w, h])
+                heading = np.deg2rad(90 - yaw)
+                raster, uv_pixels, heading, map_mask = random_rot90(
+                    raster, uv_pixels, heading, map_mask, seed
+                )
+                # Convert back to normalized coordinates
+                uv_gt = self.pixel_to_normalized_uv(
+                    uv_pixels, [raster.shape[-1], raster.shape[-2]]
                 )
             if self.cfg.data.augmentation.flip:
-                # print(image.shape)
-                image, raster, uv_gt, heading, map_mask = random_flip(
-                    image, raster, uv_gt, heading, map_mask, seed
+                h, w = raster.shape[-2:]
+                uv_pixels = self.normalized_to_pixel_uv(uv_gt, [w, h])
+                image, raster, uv_pixels, heading, map_mask = random_flip(
+                    image, raster, uv_pixels, heading, map_mask, seed
                 )
-        # This is taken from the orienternet code. Not sure if this is true for the YYC dataset
-        yaw = 90 - np.rad2deg(heading)
+                # Convert back to normalized coordinates
+                uv_gt = self.pixel_to_normalized_uv(
+                    uv_pixels, [raster.shape[-1], raster.shape[-2]]
+                )
+
+        # yaw = 90 - np.rad2deg(heading)
 
         # The dictionary to be returned
         data = {
@@ -562,16 +652,39 @@ class YYCDatasetMVF(Dataset):
         }
 
         if self.cfg.data.add_map_mask:
-            data["map_mask"] = torch.from_numpy(map_mask.copy())
+            map_mask_tensor = torch.from_numpy(
+                np.ascontiguousarray(map_mask.copy())
+            ).float()
+            map_mask_tensor = (
+                F.interpolate(
+                    map_mask_tensor.unsqueeze(0).unsqueeze(0),
+                    size=(self.cfg.data.map_resize_dim, self.cfg.data.map_resize_dim),
+                    mode="nearest",
+                )
+                .squeeze(0)
+                .squeeze(0)
+                .bool()
+            )
+            data["map_mask"] = map_mask_tensor
 
-        map_copy = np.ascontiguousarray(raster).copy()
+        raster_tensor = torch.from_numpy(np.ascontiguousarray(raster).copy())
+        raster_tensor = (
+            F.interpolate(
+                raster_tensor.unsqueeze(0),
+                size=(self.cfg.data.map_resize_dim, self.cfg.data.map_resize_dim),
+                mode="nearest",
+            )
+            .squeeze(0)
+            .squeeze(0)
+            .long()
+        )
 
         data = {
             **data,
             "image": image,
             "valid": valid,
             "camera": cam,
-            "map": torch.from_numpy(map_copy).long(),
+            "map": raster_tensor,
             "uv": torch.from_numpy(uv_gt.copy()).float(),
             "uv_init": torch.from_numpy(uv_init.copy()).float(),
             "roll_pitch_yaw": torch.tensor((roll, pitch, yaw)).float(),
@@ -579,6 +692,6 @@ class YYCDatasetMVF(Dataset):
         }
 
         # Visualize the sample (remove this after debugging)
-        self.visualize_sample(data)
+        # self.visualize_sample(data)
 
         return data

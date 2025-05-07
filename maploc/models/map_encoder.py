@@ -49,6 +49,16 @@ class MapEncoder(BaseModel):
             )
 
     def _forward(self, data):
+        for i, k in enumerate(("areas", "ways", "nodes")):
+            indices = data["map"][:, i]
+            num_classes = self.conf.num_classes[k]
+            max_idx = indices.max().item()
+            if max_idx >= num_classes + 1:  # +1 because of padding idx 0
+                raise ValueError(
+                    f"{data['scene']} {data['name']} {data['map'].shape} "
+                    f"{k}: Found index {max_idx} but max should be {num_classes}. "
+                    f"Shape: {indices.shape}, Unique values: {torch.unique(indices)}"
+                )
         embeddings = [
             self.embeddings[k](data["map"][:, i])
             for i, k in enumerate(("areas", "ways", "nodes"))

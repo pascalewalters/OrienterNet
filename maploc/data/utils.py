@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy.spatial.transform import Rotation
+import torch
 
 
 def crop_map(raster, xy, size, seed=None):
@@ -38,20 +39,49 @@ def random_flip(image, raster, xy, heading, mask=None, seed=None):
     state = np.random.RandomState(seed)
     if state.rand() > 0.5:  # no flip
         return image, raster, xy, heading, mask
-    image = image[:, ::-1]
+    # Safely flip image depending on type
+    if torch.is_tensor(image):
+        image = torch.flip(image, dims=[1])  # Flip width dimension
+    else:
+        image = np.flip(image, axis=1)  # Flip width dimension
+    # image = image[:, ::-1]
     h, w = raster.shape[-2:]
+    # if state.rand() > 0.5:  # flip x
+    #     raster = raster[..., :, ::-1]
+    #     if mask is not None:
+    #         mask = mask[..., :, ::-1]
+    #     xy = np.array([w - 1 - xy[0], xy[1]])
+    #     heading = np.pi - heading
+    # else:  # flip y
+    #     raster = raster[..., ::-1, :]
+    #     if mask is not None:
+    #         mask = mask[..., ::-1, :]
+    #     xy = np.array([xy[0], h - 1 - xy[1]])
+    #     heading = -heading
+
     if state.rand() > 0.5:  # flip x
-        raster = raster[..., :, ::-1]
-        if mask is not None:
-            mask = mask[..., :, ::-1]
+        if torch.is_tensor(raster):
+            raster = torch.flip(raster, dims=[-1])
+            if mask is not None:
+                mask = torch.flip(mask, dims=[-1])
+        else:
+            raster = np.flip(raster, axis=-1)
+            if mask is not None:
+                mask = np.flip(mask, axis=-1)
         xy = np.array([w - 1 - xy[0], xy[1]])
         heading = np.pi - heading
     else:  # flip y
-        raster = raster[..., ::-1, :]
-        if mask is not None:
-            mask = mask[..., ::-1, :]
+        if torch.is_tensor(raster):
+            raster = torch.flip(raster, dims=[-2])
+            if mask is not None:
+                mask = torch.flip(mask, dims=[-2])
+        else:
+            raster = np.flip(raster, axis=-2)
+            if mask is not None:
+                mask = np.flip(mask, axis=-2)
         xy = np.array([xy[0], h - 1 - xy[1]])
         heading = -heading
+
     heading = heading % (2 * np.pi)
     return image, raster, xy, heading, mask
 
