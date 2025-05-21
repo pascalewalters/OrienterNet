@@ -130,9 +130,9 @@ def sample_xyr(volume, xy_grid, angle_grid, nearest_for_inf=False):
     # (B, C, H, W, N) to (B, C, H, W, N+1)
     volume_padded = pad(volume, [0, 1, 0, 0, 0, 0], mode="circular")
 
-    # size = xy_grid.new_tensor(volume.shape[-3:-1][::-1])
-    # xy_norm = xy_grid / (size - 1)  # align_corners=True
-    xy_norm = (xy_grid + 1) / 2
+    size = xy_grid.new_tensor(volume.shape[-3:-1][::-1])
+    xy_norm = xy_grid / (size - 1)  # align_corners=True
+    # xy_norm = (xy_grid + 1) / 2
     angle_norm = (angle_grid / 360) % 1
     grid = torch.concat([angle_norm.unsqueeze(-1), xy_norm], -1)
     grid_norm = grid * 2 - 1

@@ -608,10 +608,11 @@ class NaverDatasetMVF(Dataset):
                 dtype=bool,
             )
 
-        # Crop the map randomly such that the UV point is within the cropped area
-        raster, map_mask, uv_gt = self.random_crop_around_point(
-            raster, uv_gt, map_mask, self.cfg.data.map_resize_dim
-        )
+        if self.stage != "test":
+            # Crop the map randomly such that the UV point is within the cropped area
+            raster, map_mask, uv_gt = self.random_crop_around_point(
+                raster, uv_gt, map_mask, self.cfg.data.map_resize_dim
+            )
 
         # Simple orientation from bearing
         roll, pitch = 0.0, 0.0  # Assuming flat ground
@@ -677,6 +678,13 @@ class NaverDatasetMVF(Dataset):
             .squeeze(0)
             .squeeze(0)
             .long()
+        )
+
+        uv_gt = self.normalized_to_pixel_uv(
+            uv_gt, [self.cfg.data.map_resize_dim, self.cfg.data.map_resize_dim]
+        )
+        uv_init = self.normalized_to_pixel_uv(
+            uv_init, [self.cfg.data.map_resize_dim, self.cfg.data.map_resize_dim]
         )
 
         data = {
