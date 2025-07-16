@@ -8,10 +8,11 @@ import json
 import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
-from clearml import Task, Dataset
+from clearml import Task, Dataset, Model
 import tqdm
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from transformers import get_linear_schedule_with_warmup
 
 from maploc import EXPERIMENTS_PATH, logger
 from maploc.module import ONGenericModule
@@ -83,98 +84,139 @@ def visualize_predictions(batch, pred, epoch, output_dir, batch_number=0):
     viz_dir = Path(output_dir) / "visualizations" / f"epoch_{epoch:03d}"
     viz_dir.mkdir(parents=True, exist_ok=True)
 
-    for i in range(min(3, len(batch["image"]))):  # Visualize first 3 samples
-        fig, axes = plt.subplots(2, 3, figsize=(15, 15))
+    try:
 
-        # Plot input image
-        axes[0, 0].imshow(batch["image"][i].cpu().permute(1, 2, 0))
-        axes[0, 0].set_title("Input Image")
+        for i in range(min(3, len(batch["image"]))):  # Visualize first 3 samples
+            fig, axes = plt.subplots(2, 3, figsize=(15, 15))
 
-        # Plot map with ground truth and predicted position
-        # Convert raster from tensor [C,H,W] to numpy [H,W,C]
-        raster = batch["map"][i].cpu().permute(1, 2, 0).numpy()
+            # Plot input image
+            axes[0, 0].imshow(batch["image"][i].cpu().permute(1, 2, 0))
+            axes[0, 0].set_title("Input Image")
 
-        # Create colored visualization where each channel gets its own color
-        colors = [
-            [1, 0, 0],  # Red for channel 0
-            [0, 1, 0],  # Green for channel 1
-            [0, 0, 1],  # Blue for channel 2
-        ]
+            # Plot map with ground truth and predicted position
+            # Convert raster from tensor [C,H,W] to numpy [H,W,C]
+            raster = batch["map"][i].cpu().permute(1, 2, 0).numpy()
 
-        # Create RGB visualization
-        colored_raster = np.zeros((raster.shape[0], raster.shape[1], 3))
-        for channel in range(raster.shape[-1]):  # For each channel
-            mask = raster[:, :, channel] > 0
-            colored_raster[mask] = colors[channel]
+            # Create colored visualization where each channel gets its own color
+            colors = [
+                [1, 0, 0],  # Red for channel 0
+                [0, 1, 0],  # Green for channel 1
+                [0, 0, 1],  # Blue for channel 2
+            ]
 
-        # Clip to [0,1] range
-        colored_raster = np.clip(colored_raster, 0, 1)
+            # Create RGB visualization
+            colored_raster = np.zeros((raster.shape[0], raster.shape[1], 3))
+            for channel in range(raster.shape[-1]):  # For each channel
+                mask = raster[:, :, channel] > 0
+                colored_raster[mask] = colors[channel]
 
-        axes[0, 1].imshow(colored_raster)
-        gt_uv = batch["uv"][i].cpu().numpy()
-        pred_uv = pred["uv_max"][i].cpu().numpy()
-        print(f"GT UV: {gt_uv}, Pred UV: {pred_uv}")
-        axes[0, 1].scatter(gt_uv[0], gt_uv[1], c="w", marker="x", label="Ground Truth")
-        axes[0, 1].scatter(pred_uv[0], pred_uv[1], c="w", marker="+", label="Prediction")
-        axes[0, 1].legend()
-        axes[0, 1].set_title("Map Predictions")
+            # Clip to [0,1] range
+            colored_raster = np.clip(colored_raster, 0, 1)
 
-        # Plot map features
-        map_features = pred["map"]["map_features"][i][0].cpu().numpy()
-        # Reshape to 2D array [H*W, C]
-        features_2d = np.transpose(map_features, (1, 2, 0)).reshape(-1, map_features.shape[0])
-        # Apply PCA
-        pca = PCA(n_components=3)
-        features_pca = pca.fit_transform(features_2d)
-        # Reshape back to image shape [H, W, 3]
-        features_rgb = features_pca.reshape(map_features.shape[1], map_features.shape[2], 3)
-        # Normalize to [0, 1]
-        features_rgb = (features_rgb - features_rgb.min()) / (
-            features_rgb.max() - features_rgb.min()
-        )
-        axes[0, 2].imshow(features_rgb)
-        axes[0, 2].set_title("Map Features (PCA)")
+            axes[0, 1].imshow(colored_raster)
+            gt_uv = batch["uv"][i].cpu().numpy()
+            pred_uv = pred["uv_max"][i].cpu().numpy()
+            # print(f"GT UV: {gt_uv}, Pred UV: {pred_uv}")
+            axes[0, 1].scatter(
+                gt_uv[0], gt_uv[1], c="w", marker="x", label="Ground Truth"
+            )
+            axes[0, 1].scatter(
+                pred_uv[0], pred_uv[1], c="w", marker="+", label="Prediction"
+            )
+            axes[0, 1].legend()
+            axes[0, 1].set_title("Map Predictions")
 
-        image_features = pred["features_image"][i].cpu().numpy()
-        features_2d = np.transpose(image_features, (1, 2, 0)).reshape(-1, image_features.shape[0])
-        features_pca = pca.fit_transform(features_2d)
-        features_rgb = features_pca.reshape(image_features.shape[1], image_features.shape[2], 3)
-        features_rgb = (features_rgb - features_rgb.min()) / (
-            features_rgb.max() - features_rgb.min()
-        )
-        axes[1, 0].imshow(features_rgb)
-        axes[1, 0].set_title("Image Features (PCA)")
+            # Plot map features
+            map_features = pred["map"]["map_features"][i][0].detach().cpu().numpy()
+            C, H, W = map_features.shape
+            map_features_flat = map_features.reshape(C, -1).T
 
-        bev_features = pred["features_bev"][i].cpu().numpy()
-        features_2d = np.transpose(bev_features, (1, 2, 0)).reshape(-1, bev_features.shape[0])
-        features_pca = pca.fit_transform(features_2d)
-        features_rgb = features_pca.reshape(bev_features.shape[1], bev_features.shape[2], 3)
-        features_rgb = (features_rgb - features_rgb.min()) / (
-            features_rgb.max() - features_rgb.min()
-        )
-        axes[1, 1].imshow(features_rgb)
-        axes[1, 1].set_title("BEV Features (PCA)")
+            if "map_mask" in pred:
+                valid_mask = pred["map_mask"][i].detach().cpu().numpy()
+                valid_mask = valid_mask.reshape(1, -1).T
+                valid_mask = ~np.all(valid_mask == 0, axis=1)
+            else:
+                valid_mask = ~np.all(map_features_flat == 0, axis=1)
 
-        scores = pred["scores"][i].cpu().numpy()
-        clipped_scores = np.clip(scores, -3, 10)
-        features_2d = clipped_scores.reshape(-1, scores.shape[-1])
-        features_pca = pca.fit_transform(features_2d)
-        features_rgb = features_pca.reshape(scores.shape[0], scores.shape[1], 3)
-        features_rgb = (features_rgb - features_rgb.min()) / (
-            features_rgb.max() - features_rgb.min()
-        )
-        axes[1, 2].imshow(features_rgb)
-        axes[1, 2].set_title("Scores (PCA)")
+            pca = PCA(n_components=3)
+            map_features_pca = pca.fit_transform(map_features_flat[valid_mask])
 
-        plt.tight_layout()
-        plt.savefig(viz_dir / f"sample_{batch_number}.png")
-        plt.close()
+            # Reconstruct full image
+            map_features_pca_full = np.zeros((H * W, 3))
+            map_features_pca_full[valid_mask] = map_features_pca
+            map_features_pca_viz = map_features_pca_full.reshape((H, W, 3))
+
+            # Normalize for visualization
+            map_features_pca_viz = (
+                map_features_pca_viz - map_features_pca_viz.min()
+            ) / (map_features_pca_viz.max() - map_features_pca_viz.min())
+            axes[0, 2].imshow(map_features_pca_viz)
+            axes[0, 2].set_title("Map Features (PCA)")
+
+            image_features = pred["features_image"][i].cpu().numpy()
+            features_2d = np.transpose(image_features, (1, 2, 0)).reshape(
+                -1, image_features.shape[0]
+            )
+            features_pca = pca.fit_transform(features_2d)
+            features_rgb = features_pca.reshape(
+                image_features.shape[1], image_features.shape[2], 3
+            )
+            features_rgb = (features_rgb - features_rgb.min()) / (
+                features_rgb.max() - features_rgb.min()
+            )
+            axes[1, 0].imshow(features_rgb)
+            axes[1, 0].set_title("Image Features (PCA)")
+
+            bev_features = pred["features_bev"][i].detach().cpu().numpy()
+            C, H, W = bev_features.shape
+            f_bev_flat = bev_features.reshape(C, -1).T
+
+            # Apply PCA only to non-zero regions
+            valid_mask = ~np.all(f_bev_flat == 0, axis=1)
+            pca = PCA(n_components=3)
+            f_bev_pca = pca.fit_transform(f_bev_flat[valid_mask])
+
+            # Reconstruct full image
+            f_bev_pca_full = np.zeros((H * W, 3))
+            f_bev_pca_full[valid_mask] = f_bev_pca
+            f_bev_pca_viz = f_bev_pca_full.reshape((H, W, 3))
+
+            # Normalize for visualization
+            f_bev_pca_viz = (f_bev_pca_viz - f_bev_pca_viz.min()) / (
+                f_bev_pca_viz.max() - f_bev_pca_viz.min()
+            )
+
+            axes[1, 1].imshow(f_bev_pca_viz)
+            axes[1, 1].set_title("BEV Features (PCA)")
+
+            # indices = scores.flatten(-3).max(-1).indices
+            # width, num_rotations = scores.shape[-2:]
+            # wr = width * num_rotations
+            # y = torch.div(indices, wr, rounding_mode="floor")
+            # x = torch.div(indices % wr, num_rotations, rounding_mode="floor")
+
+            # Plot scores
+            scores = pred["scores"][i].detach().cpu().numpy()
+            score_max = scores.max(-1)
+            axes[1, 2].imshow(score_max)
+            axes[1, 2].set_title("Mean Scores Across Rotations")
+
+            # plt.show()
+
+            plt.tight_layout()
+            plt.savefig(viz_dir / f"sample_{batch_number}.png")
+            plt.close()
+    finally:
+        plt.close("all")
+
 
 def delete_previous_checkpoint(experiment_dir, current_epoch):
     """Delete the previous epoch's checkpoint to save disk space"""
     if current_epoch > 0:
-        prev_latest = osp.join(experiment_dir, f"latest-model-epoch-{current_epoch-1:02d}.pt")
-        
+        prev_latest = osp.join(
+            experiment_dir, f"latest-model-epoch-{current_epoch-1:02d}.pt"
+        )
+
         # Delete previous checkpoints if they exist
         if osp.exists(prev_latest):
             try:
@@ -202,7 +244,7 @@ def train(config: DictConfig):
 
     model = ONGenericModule(config).to(device)
     # Load state dict, handling potential key mismatches
-    load_pretrained_weights(model, config.train.experiment.pretrained_path, device)
+    # load_pretrained_weights(model, config.train.experiment.pretrained_path, device)
 
     # setup directories
     experiment_dir = osp.join(EXPERIMENTS_PATH, config.experiment.name)
@@ -210,9 +252,9 @@ def train(config: DictConfig):
     logger.info("Experiment directory: %s", experiment_dir)
 
     optimizer = model.configure_optimizers()
-    scheduler = None
-    if isinstance(optimizer, tuple):
-        optimizer, scheduler = optimizer
+    # scheduler = None
+    # if isinstance(optimizer, tuple):
+    #     optimizer, scheduler = optimizer
 
     if config.train.experiment.clearml:
         Task.add_requirements("networkx", "3.1")
@@ -226,30 +268,30 @@ def train(config: DictConfig):
         # task.force_requirements_env_freeze(force=True, requirements_file=None)
         task.connect(config)
 
-        # dataset = Dataset.get(dataset_id=config.clearml.dataset_id)
-        # dataset = Dataset.get(
-        #     dataset_name="basemaps_no_symbols",
-        #     dataset_project="SymbolDetection",
-        #     dataset_version="1.0.0"
-        # )
+        dataset = Dataset.get(dataset_id=config.clearml.dataset_id)
 
-        # local_data_path = dataset.get_local_copy()
-        # # Update the data_dir path in the nested config
-        # config.data.paths.data_dir = str(local_data_path)
-        # config.data.paths.combined_geojson_path = (
-        #     str(local_data_path) + "/merged.geojson"
-        # )
-        # config.data.paths.photos_dir = str(local_data_path) + "/merged_images"
-        # config.data.paths.valid_dir = str(local_data_path) + "/valid"
-        # config.data.paths.split_file = str(local_data_path) + "/merged_splits.json"
-        # config.data.paths.mvf_data_path = str(local_data_path) + "/mvf_data/"
-        # config.data.paths.raster_map_path = str(local_data_path) + "/raster_maps/"
-        # config.data.paths.area_index_path = (
-        #     str(local_data_path) + "/area_index_mapping.json"
-        # )
-        # config.data.paths.line_index_path = (
-        #     str(local_data_path) + "/line_index_mapping.json"
-        # )
+        local_data_path = dataset.get_local_copy()
+        # Update the data_dir path in the nested config
+        config.data.paths.data_dir = str(local_data_path)
+        config.data.paths.combined_geojson_path = (
+            str(local_data_path) + "/merged.geojson"
+        )
+        config.data.paths.photos_dir = str(local_data_path) + "/merged_images"
+        config.data.paths.valid_dir = str(local_data_path) + "/valid"
+        config.data.paths.split_file = str(local_data_path) + "/merged_splits.json"
+        config.data.paths.mvf_data_path = str(local_data_path) + "/mvf_data/"
+        config.data.paths.raster_map_path = str(local_data_path) + "/raster_maps/"
+        config.data.paths.area_index_path = (
+            str(local_data_path) + "/area_index_mapping.json"
+        )
+        config.data.paths.line_index_path = (
+            str(local_data_path) + "/line_index_mapping.json"
+        )
+
+        pretrained_model_path = Model(
+            "1fb84ca3c8e24bf8b75de85cb240225d"
+        ).get_local_copy()
+        load_pretrained_weights(model, pretrained_model_path, device)
 
     train_dataset = NaverDatasetMVF(config, stage="train")
     val_dataset = NaverDatasetMVF(config, stage="val")
@@ -262,6 +304,15 @@ def train(config: DictConfig):
     train_loader = create_dataloader(train_dataset, config, "train")
     val_loader = create_dataloader(val_dataset, config, "val")
     test_loader = create_dataloader(test_dataset, config, "test")
+
+    steps_per_epoch = len(train_dataset) // config.data.loading.train.batch_size
+    total_training_steps = steps_per_epoch * config.train.training.trainer.max_epochs
+    warmup_steps = int(0.1 * total_training_steps)  # 10% of total steps
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_training_steps,
+    )
 
     best_val_loss = float("inf")
 
@@ -280,13 +331,16 @@ def train(config: DictConfig):
             loss = model.training_step(batch)
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
         train_metrics = model.get_epoch_train_metrics()
 
         # Validation loop
         model.eval()
         with torch.no_grad():
-            for val_batch_idx, batch in enumerate(val_loader):
+            for val_batch_idx, batch in tqdm.tqdm(
+                enumerate(val_loader), total=len(val_loader), desc="Validation"
+            ):
                 batch = {
                     k: v.to(device) if torch.is_tensor(v) else v
                     for k, v in batch.items()

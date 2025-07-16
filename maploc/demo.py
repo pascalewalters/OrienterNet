@@ -105,7 +105,7 @@ class Demo:
         )
         # config = ckpt["hyper_parameters"]
 
-        config_path = "/home/kevinmeng/workspace/mappedin/VPS/OrienterNet/maploc/conf/orienternet.yaml"
+        config_path = "/home/pascale/Documents/VPS/OrienterNet/maploc/conf/orienternet_mvf_naver.yaml"
         with open(config_path, "r") as f:
             # Convert the YAML to an OmegaConf object
             config = OmegaConf.create(yaml.safe_load(f))

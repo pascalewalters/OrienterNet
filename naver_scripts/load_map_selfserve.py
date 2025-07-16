@@ -9,11 +9,11 @@ from pyproj import Proj, Transformer
 import dill
 
 
-MVF_PATH = "/home/pascale/Documents/VPS/WayIL/Naver/gangnam/Good Gangnam Station-mvf"
-PICKLE_PATH = "gangnam_b2_mvf_data.pkl"
+MVF_PATH = "/home/pascale/Documents/VPS/WayIL/Naver/hyundai/Hyundai Department Store Pangyo-mvf"
+PICKLE_PATH = "hyundai_4F_mvf_data.pkl"
 # AREA_MAPPING_FILE = "hyundai_area_index_mapping.json"
 # LINE_MAPPING_FILE = "hyundai_line_index_mapping.json"
-FLOOR_ID = "m_ec13525d241ff4da"
+FLOOR_ID = "m_b68fd90d5826aecf"
 
 
 def create_local_mercator_transform(ref_lat, ref_lon):

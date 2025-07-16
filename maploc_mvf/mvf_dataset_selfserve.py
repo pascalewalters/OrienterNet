@@ -21,12 +21,8 @@ from maploc.data.utils import random_flip, random_rot90
 def process_image(image, resize_image=None):
     """Process image for training"""
     # Convert to tensor and normalize
-    image = (
-        torch.from_numpy(np.ascontiguousarray(image))
-        .permute(2, 0, 1)  # CHW format
-        .float()
-        .div_(255)
-    )
+    # Image is numpy array in RGB format
+    image = torch.from_numpy(image).permute(2, 0, 1).float().div_(255)  # CHW format
 
     # Create valid mask (all pixels are valid)
     valid = torch.ones_like(image[0], dtype=torch.bool)
@@ -35,7 +31,7 @@ def process_image(image, resize_image=None):
     if resize_image is not None:
         # First resize maintaining aspect ratio
         h, w = image.shape[-2:]
-        scale = resize_image / max(h, w)
+        scale = resize_image / min(h, w)
         new_h = int(h * scale)
         new_w = int(w * scale)
 
@@ -45,6 +41,10 @@ def process_image(image, resize_image=None):
             size=(new_h, new_w),
             mode="bilinear",
             align_corners=False,
+        ).squeeze(0)
+
+        image = transforms.functional.center_crop(
+            image.unsqueeze(0), (resize_image, resize_image)
         ).squeeze(0)
 
         valid = (
@@ -57,19 +57,27 @@ def process_image(image, resize_image=None):
             .squeeze(0)
             .bool()
         )
+        valid = (
+            transforms.functional.center_crop(
+                valid.unsqueeze(0).unsqueeze(0), (resize_image, resize_image)
+            )
+            .squeeze(0)
+            .squeeze(0)
+            .bool()
+        )
 
-        # Create padded tensors
-        padded_image = torch.zeros((3, resize_image, resize_image), dtype=image.dtype)
-        padded_valid = torch.zeros((resize_image, resize_image), dtype=valid.dtype)
+        # # Create padded tensors
+        # padded_image = torch.zeros((3, resize_image, resize_image), dtype=image.dtype)
+        # padded_valid = torch.zeros((resize_image, resize_image), dtype=valid.dtype)
 
-        pad_h = (resize_image - new_h) // 2
-        pad_w = (resize_image - new_w) // 2
+        # pad_h = (resize_image - new_h) // 2
+        # pad_w = (resize_image - new_w) // 2
 
-        padded_image[:, pad_h : pad_h + new_h, pad_w : pad_w + new_w] = image
-        padded_valid[pad_h : pad_h + new_h, pad_w : pad_w + new_w] = valid
+        # padded_image[:, pad_h : pad_h + new_h, pad_w : pad_w + new_w] = image
+        # padded_valid[pad_h : pad_h + new_h, pad_w : pad_w + new_w] = valid
 
-        image = padded_image
-        valid = padded_valid
+        # image = padded_image
+        # valid = padded_valid
 
     return image, valid
 
@@ -272,8 +280,10 @@ class NaverDatasetMVF(Dataset):
 
         # Get UV coordinates
         uv = data["uv"].numpy()
-        u = (uv[0] * canvas_scaling[0] / 2) + canvas_scaling[0] / 2
-        v = (uv[1] * canvas_scaling[1] / 2) + canvas_scaling[1] / 2
+        # u = (uv[0] * canvas_scaling[0] / 2) + canvas_scaling[0] / 2
+        # v = (uv[1] * canvas_scaling[1] / 2) + canvas_scaling[1] / 2
+        u = uv[0]
+        v = uv[1]
 
         # Convert map mask from tensor to numpy if it exists
         map_mask = data["map_mask"].numpy() if "map_mask" in data else None
@@ -508,7 +518,9 @@ class NaverDatasetMVF(Dataset):
         valid = np.ones_like(image)
 
         # Create camera parameters for the image
-        h, w = image.shape[:2]  # Get image dimensions
+        # h, w = image.shape[:2]  # Get image dimensions
+        h = 256
+        w = 256
         cam_dict = {
             "model": "SIMPLE_RADIAL",
             "width": w,

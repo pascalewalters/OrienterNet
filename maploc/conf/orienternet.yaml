@@ -83,7 +83,7 @@ train:
     gpus: 1
     seed: 0
   training:
-    lr: 1e-4 # 1e-4
+    lr: 1e-3 # 1e-4
     lr_scheduler: null
     finetune_from_checkpoint: null
     trainer:

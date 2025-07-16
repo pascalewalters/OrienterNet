@@ -94,7 +94,100 @@ class OrienterNet(BaseModel):
             temperature = torch.nn.Parameter(torch.tensor(0.0))
             self.register_parameter("temperature", temperature)
 
+    def visualize_bev_projection(self, f_polar, f_bev, valid_bev, camera):
+        import matplotlib.pyplot as plt
+        import torch.nn.functional as F
+        from sklearn.decomposition import PCA
+        import numpy as np
+
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+
+        # 1. Polar features before projection
+        polar_viz = f_polar[0].mean(dim=0).detach().cpu().numpy()
+        im1 = ax1.imshow(polar_viz, aspect="auto")
+        ax1.set_title("Polar Features (mean)")
+        plt.colorbar(im1, ax=ax1)
+
+        # 2. Raw BEV features (mean)
+        bev_mean = f_bev[0].mean(dim=0).detach().cpu().numpy()
+        im2 = ax2.imshow(bev_mean)
+        ax2.set_title("BEV Features (mean)")
+        plt.colorbar(im2, ax=ax2)
+
+        # 3. BEV features (PCA)
+        f_bev_np = f_bev[0].detach().cpu().numpy()
+        C, H, W = f_bev_np.shape
+        f_bev_flat = f_bev_np.reshape(C, -1).T
+
+        # Apply PCA only to non-zero regions
+        valid_mask = ~np.all(f_bev_flat == 0, axis=1)
+        if valid_mask.any():
+            pca = PCA(n_components=3)
+            f_bev_pca = pca.fit_transform(f_bev_flat[valid_mask])
+
+            # Reconstruct full image
+            f_bev_pca_full = np.zeros((H * W, 3))
+            f_bev_pca_full[valid_mask] = f_bev_pca
+            f_bev_pca_viz = f_bev_pca_full.reshape(H, W, 3)
+
+            # Normalize for visualization
+            f_bev_pca_viz = (f_bev_pca_viz - f_bev_pca_viz.min()) / (
+                f_bev_pca_viz.max() - f_bev_pca_viz.min()
+            )
+
+            im3 = ax3.imshow(f_bev_pca_viz)
+            ax3.set_title("BEV Features (PCA)")
+
+        # 4. Valid mask with feature statistics
+        im4 = ax4.imshow(valid_bev[0].cpu().numpy(), cmap="gray")
+        ax4.set_title("Valid BEV Mask")
+
+        # Add feature statistics
+        stats_text = (
+            f"Feature Statistics:\n"
+            f"Polar shape: {f_polar.shape}\n"
+            f"BEV shape: {f_bev.shape}\n"
+            f"Valid pixels: {valid_bev.sum().item()}\n"
+            f"Border ratio: {valid_bev[0].float().mean().item():.2f}\n"
+            f"Max value: {f_bev.max().item():.2f}\n"
+            f"Mean value: {f_bev.mean().item():.2f}"
+        )
+        plt.figtext(1.02, 0.5, stats_text, fontsize=8, family="monospace")
+
+        plt.tight_layout()
+        plt.savefig("bev_projection_debug.png", bbox_inches="tight", dpi=300)
+        plt.close()
+
     def exhaustive_voting(self, f_bev, f_map, valid_bev, confidence_bev=None):
+        def visualize_templates(f_bev, valid_bev, templates):
+            import matplotlib.pyplot as plt
+
+            fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+
+            # 1. BEV features
+            im1 = axes[0].imshow(f_bev[0].mean(dim=0).cpu().numpy())
+            axes[0].set_title("BEV Features (mean)")
+            plt.colorbar(im1, ax=axes[0])
+
+            # 2. Valid BEV mask
+            axes[1].imshow(valid_bev[0].cpu().numpy(), cmap="gray")
+            axes[1].set_title("Valid BEV Mask")
+
+            # 3. First template
+            im3 = axes[2].imshow(templates[0, 0].mean(dim=0).cpu().numpy())
+            axes[2].set_title("First Template (0°)")
+            plt.colorbar(im3, ax=axes[2])
+
+            # 4. Middle template
+            mid_idx = templates.shape[1] // 2
+            im4 = axes[3].imshow(templates[0, mid_idx].mean(dim=0).cpu().numpy())
+            axes[3].set_title(f"Middle Template ({180}°)")
+            plt.colorbar(im4, ax=axes[3])
+
+            plt.tight_layout()
+            plt.savefig("template_debug.png")
+            plt.close()
+
         if self.conf.normalize_features:
             f_bev = normalize(f_bev, dim=1)
             f_map = normalize(f_map, dim=1)
@@ -104,12 +197,14 @@ class OrienterNet(BaseModel):
             f_bev = f_bev * confidence_bev.unsqueeze(1)
         f_bev = f_bev.masked_fill(~valid_bev.unsqueeze(1), 0.0)
         templates = self.template_sampler(f_bev)
+
         with torch.autocast("cuda", enabled=False):
             scores = conv2d_fft_batchwise(
                 f_map.float(),
                 templates.float(),
                 padding_mode=self.conf.padding_matching,
             )
+            # scores is [1, 64, 256, 256]
         if self.conf.add_temperature:
             scores = scores * torch.exp(self.temperature)
 
@@ -134,6 +229,10 @@ class OrienterNet(BaseModel):
 
         # Estimate the monocular priors.
         pred["pixel_scales"] = scales = self.scale_classifier(f_image.moveaxis(1, -1))
+        # f_image is [1, 128, 128, 128]
+        # scales is [1, 128, 128, 33]
+        # f_polar is [1, 128, 64, 128]
+        # [batch, d (image features), z (depth bins), w (image width)]
         f_polar = self.projection_polar(f_image, scales, camera)
 
         # Map to the BEV.
@@ -141,6 +240,9 @@ class OrienterNet(BaseModel):
             f_bev, valid_bev, _ = self.projection_bev(
                 f_polar.float(), None, camera.float()
             )
+        # f_bev is [1, 128, 64, 129]
+        # valid_bev is [1, 64, 129]
+
         pred_bev = {}
         if self.conf.bev_net is None:
             # channel last -> classifier -> channel first
@@ -151,8 +253,14 @@ class OrienterNet(BaseModel):
 
         # Normalize features before matching
         if self.conf.regularization.feature_norm:
-            f_bev = torch.nn.functional.normalize(f_bev, dim=1)
-            f_map = torch.nn.functional.normalize(f_map, dim=1)
+            f_bev = torch.nn.functional.normalize(
+                f_bev * valid_bev.unsqueeze(1), dim=1
+            ) * valid_bev.unsqueeze(1)
+            f_map = torch.nn.functional.normalize(
+                f_map * data["map_mask"].unsqueeze(1), dim=1
+            ) * data["map_mask"].unsqueeze(1)
+
+        # self.visualize_bev_projection(f_polar, f_map, data["map_mask"], camera)
 
         scores = self.exhaustive_voting(
             f_bev, f_map, valid_bev, pred_bev.get("confidence")
@@ -163,26 +271,19 @@ class OrienterNet(BaseModel):
         # pred["scores_unmasked"] = scores.clone()
         if "map_mask" in data:
             # scores.masked_fill_(~data["map_mask"][..., None], -np.inf)
-            # Ensure at least one valid prediction per batch
             map_mask = data["map_mask"]
             # Broadcast mask to match scores shape
-            if map_mask.shape[-2:] != scores.shape[1:3]:  # Compare H,W dimensions
+            if map_mask.shape[-2:] != scores.shape[1:3]:
                 map_mask = (
                     torch.nn.functional.interpolate(
-                        map_mask.float().unsqueeze(1),  # Add channel dim
-                        size=scores.shape[1:3],  # Target H,W
+                        map_mask.float().unsqueeze(1),
+                        size=scores.shape[1:3],
                         mode="nearest",
                     )
                     .squeeze(1)
                     .bool()
-                )  # Remove channel dim and convert back to bool
-            # if map_mask.sum(dim=(1, 2)) == 0:
-            #     # If mask is empty, don't apply it
-            #     print("Warning: Empty map mask detected")
-            # else:
-            scores.masked_fill_(
-                ~map_mask[..., None], -1e4
-            )  # Use finite value instead of -inf
+                )
+            scores.masked_fill_(~map_mask[..., None], -1e4)
 
         if "yaw_prior" in data:
             mask_yaw_prior(scores, data["yaw_prior"], self.conf.num_rotations)
@@ -204,6 +305,7 @@ class OrienterNet(BaseModel):
             "features_image": f_image,
             "features_bev": f_bev,
             "valid_bev": valid_bev.squeeze(1),
+            "map_mask": data.get("map_mask", None),
         }
 
     def loss(self, pred, data):

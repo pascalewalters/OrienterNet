@@ -7,7 +7,7 @@ defaults:
 model:
   name: orienternet
   latent_dim: 128
-  matching_dim: 8
+  matching_dim: 16
   z_max: 32
   x_max: 32
   pixel_per_meter: ${data.pixel_per_meter}
@@ -18,7 +18,7 @@ model:
     backbone:
       encoder: resnet101
   map_encoder:
-    embedding_dim: 16
+    embedding_dim: 32
     output_dim: ${..matching_dim}
     num_classes: ${data.num_classes}
     backbone:
@@ -46,19 +46,19 @@ model:
 data:
   name: naver
   paths:
-    combined_geojson_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/merged.geojson"
-    photos_dir: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/merged_images/"
+    combined_geojson_path: "/media/pascale/Expansion/VPS/naver_orienternet_data/merged.geojson"
+    photos_dir: "/media/pascale/Expansion/VPS/naver_orienternet_data/merged_images/"
     valid_dir: ""
-    split_file: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/merged_splits.json"
-    mvf_data_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/mvf_data/"
-    raster_map_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/raster_maps"
-    area_index_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/area_index_mapping.json"
-    line_index_path: "/home/pascale/Documents/VPS/WayIL/Naver/naver_orienternet_data/line_index_mapping.json"
+    split_file: "/media/pascale/Expansion/VPS/naver_orienternet_data/merged_splits.json"
+    mvf_data_path: "/media/pascale/Expansion/VPS/naver_orienternet_data/mvf_data/"
+    raster_map_path: "/media/pascale/Expansion/VPS/naver_orienternet_data/raster_maps"
+    area_index_path: "/media/pascale/Expansion/VPS/naver_orienternet_data/area_index_mapping.json"
+    line_index_path: "/media/pascale/Expansion/VPS/naver_orienternet_data/line_index_mapping.json"
   loading:
     train:
       batch_size: 1 # was 12 but OOM
-      # num_workers: ${.batch_size}
-      num_workers: 1
+      num_workers: ${.batch_size}
+      # num_workers: 1
     val:
       batch_size: ${..train.batch_size}
       num_workers: ${.batch_size}
@@ -93,10 +93,10 @@ train:
     name: ???
     gpus: 1
     seed: 0
-    pretrained_path: "orienternet_mgl.ckpt"
+    pretrained_path: "cadaccabf822d433e99b0667d2d8f9d2b"
     clearml: true
   training:
-    lr: 1e-4 # 1e-4
+    lr: 1e-3 # 1e-4
     lr_scheduler:
       # Option 1: StepLR - decreases lr by gamma every step_size epochs
       name: "step"
@@ -104,8 +104,8 @@ train:
       gamma: 0.1
     finetune_from_checkpoint: null
     trainer:
-      max_epochs: 10
-      save_epoch: 9
+      max_epochs: 100
+      save_epoch: 10
       check_val_every_n_epoch: 1
       limit_val_batches: 1000
       devices: ${experiment.gpus}
